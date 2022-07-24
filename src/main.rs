@@ -88,20 +88,38 @@ static mut SBI_STACK: [u8; SBI_STACK_SIZE] = [0; SBI_STACK_SIZE];
 
 // - .bss - main --------------------------------------------------------------
 
+use d1_pac as pac;
+
 extern "C" fn main() {
     unsafe { asm!("la a0, {}", sym HEAD_DATA) };
 
     init_bss();
 
-    let p = d1_pac::Peripherals::take().unwrap();
-    let uart = p.UART0;
+    let p = pac::Peripherals::take().unwrap();
 
+    // gpio - led
+    let gpio = &p.GPIO;
+    const PC1: u32 = 1;
+    gpio.pc_cfg0.modify(|_, w| w.pc1_select().output());
+    gpio.pc_dat.modify(|r, w| unsafe { w.bits(r.bits() & (0 << PC1)) });
+
+    // uart
+    let uart = p.UART0;
     let hello = "🦀 Hello Lichee RV D1!\n";
     for b in hello.bytes() {
         uart.thr().write(|w| unsafe { w.thr().bits(b) });
     }
 
     loop {
+        gpio.pc_dat.modify(|r, w| unsafe { w.bits(r.bits() & (0 << PC1)) });
+        for _ in 0..10_0000 {
+            core::hint::spin_loop();
+        }
+
+        gpio.pc_dat.modify(|r, w| unsafe { w.bits(r.bits() | (1 << PC1)) });
+        for _ in 0..10_0000 {
+            core::hint::spin_loop();
+        }
     }
 }
 
