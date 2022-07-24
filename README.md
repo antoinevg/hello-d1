@@ -44,6 +44,15 @@ Test:
 
 ### TODO gdb
 
+Install via homebrew:
+
+    brew tap "riscv-software-src/riscv"
+    brew install riscv-tools
+
+Build from source:
+
+    https://github.com/T-head-Semi/xuantie-gnu-toolchain
+
 
 
 ## Build, flash & run
@@ -60,6 +69,7 @@ Test:
     xfel ddr d1
     xfel write 0x40000000 target/flash.bin
     xfel exec 0x40000000
+
 
 
 ## Greets fly to
