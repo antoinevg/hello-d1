@@ -74,5 +74,8 @@ Build from source:
 
 ## Greets fly to
 
+* [riscv-rust / riscv-rust-quickstart](https://github.com/riscv-rust/riscv-rust-quickstart)
 * [luojia65 / test-d1-flash-bare](https://github.com/luojia65/test-d1-flash-bare)
 * [orangecms / test-d1-flash-bare](https://github.com/orangecms/test-d1-flash-bare/tree/dram-rerere)
+* [adamgreig / d1rgb](https://github.com/adamgreig/d1rgb)
+* [tosc-rs / d1-playground](https://github.com/tosc-rs/d1-playground)
