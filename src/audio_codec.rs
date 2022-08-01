@@ -61,44 +61,362 @@
 /// 4. Enable the DAC DRQ and DMA.
 ///
 
+pub(crate) mod registers;
+use registers::ac_dac_fifoc_ext;
+use registers::ac_dac_fifoc_ext::Rext;
+use registers::ac_dac_fifoc_ext::Wext;
+
+
+use crate::twiddle;
+
 use d1_pac as pac;
+use pac::{AUDIOCODEC, CCU};
 
 
-pub(crate) fn init_codec(p: &pac::Peripherals) {
-
-    // - sunxi_codec_init - ccu -----------------------------------------------
-    let ccu = &p.CCU;
-    ccu.pll_audio0_ctrl.write(|w|      unsafe { w.bits(0xa90b_1701) });
-    ccu.pll_audio0_pat0_ctrl.write(|w| unsafe { w.bits(0xc001_26e9) });
-    ccu.pll_audio0_pat1_ctrl.write(|w| unsafe { w.bits(0x0000_0000) });
-    ccu.pll_audio0_bias.write(|w|      unsafe { w.bits(0x0003_0000) });
-    ccu.audio_codec_bgr.write(|w|      unsafe { w.bits(0x0001_0000) });
-    ccu.audio_codec_bgr.write(|w|      unsafe { w.bits(0x0001_0001) });
-    ccu.audio_codec_dac_clk.write(|w|  unsafe { w.bits(0x8000_0000) });
-
-    // - sunxi_codec_init - audio_codec ---------------------------------------
-    let codec = &p.AUDIOCODEC;
-
-    // set dac digital volume (0*-1.16=0dB)
-    codec.ac_dac_dpc.modify(|r, w| unsafe { w.bits(r.bits() | 0x0) });                    // TODO check
-
-    // disable mic2, mic3 boost amplifier
-    let mic2_mic3_ctl = 0;  // SUNXI_MIC2_MIC3_CTL: 0x308 + 0 = 0x308;
-    codec.adc3_reg.write(|w|       unsafe { w.bits(0x44 << mic2_mic3_ctl) });
-
-    // mute ladc mixer
-    let ladcmix_src = 1;    // SUNXI_LADCMIX_SRC: 0x308 + 1 = 0x309;
-    codec.adc3_reg.modify(|r, w|   unsafe { w.bits(r.bits() | (0x00 << ladcmix_src)) });  // TODO check
-
-    // set lineout volume:  -(31-0x19)*1.5 = -9dB
-    let lineout_ctl1 = 2;   // SUNXI_LINEOUT_CTL1: 0x304 + 2  = 0x306
-    codec.adc2_reg.modify(|r, w|   unsafe { w.bits(r.bits() | (0x19 << lineout_ctl1)) }); // TODO check
-
-    // set right lineout source
-    let lineout_ctl0 = 1;   // SUNXI_LINEOUT_CTL0: 0x304 + 1  = 0x305
-    codec.adc2_reg.modify(|r, w|   unsafe { w.bits(r.bits() | (0x01 << lineout_ctl0)) }); // TODO check
+/// Built-in audio codec
+pub struct AudioCodec {
+    audio_codec: AUDIOCODEC,
 }
 
+impl AudioCodec {
+    /// Create a new `AudioCodec`
+    ///
+    /// TODO replace magic numbers with register methods
+    pub fn new(audio_codec: AUDIOCODEC, ccu: &CCU) -> AudioCodec {
+        init_codec_ccu(ccu); // 1
+        configure_dac(&audio_codec); // 2
+        configure_dma(&audio_codec); // 3
+        enable_dac_drq_dma(&audio_codec); // 4
+
+        Self { audio_codec }
+    }
+
+    pub fn start() {}
+}
+
+// ----------------------------------------------------------------------------
+
+/// 8.4.4.2 Playback Process, page 769-770
+///
+/// 1. Codec initialization: configure AUDIO_CODEC_BGR_REG
+///    to open the audio codec bus clock gating and de-assert bus
+///    reset; configure AUDIO_CODEC_DAC_CLK_REG and PLL_AUDIO1_CTRL_REG
+///    to configure PLL_Audio1 frequency and enable PLL_Audio1. For
+///    details, refer to section 3.2 “CCU”.
+/// ...
+///
+/// Also see: d1-sdk.repo/lichee/brandy-2.0/u-boot-2018/drivers/sound/sun8iw18-codec.c
+///           sunxi_codec_init()
+///
+fn init_codec_ccu(ccu: &CCU) {
+    // configure PLL_Audio0 frequency and enable PLL_Audio1
+    // TODO Shouldn't this be PLL_Audio1 ??? (see pg. 769 Playback Process)
+    //
+    // pg. 64 3.2.6.7 PLL_AUDIO0_CTRL_REG
+    // 0x0078 PLL_AUDIO0 Control Register (Default Value: 0x4814_5500)
+    // Example: 1010_1001_0000_1011_0001_0111_0000_0001
+    //
+    // 31     PLL Enable               = 1
+    // 30     LDO Enable               = 0
+    // 29:28  LOCK Enable + PLL Lock   = 10
+    // 27     PLL Output Gate Enable   = 1
+    // 26:25  ---                      = 00
+    // 24     PLL SDM Enable           = 1
+    // 23:22  ---                      = 00
+    // 21:16  PLL Post-div P           = 00_1011   = 11
+    // 15:08  PLL N                    = 0001_0111 = 23
+    // 07:06  PLL Unlock Level         = 00
+    // 05     PLL Lock Level           = 0
+    // 04:02  ---                      = 000
+    // 01     PLL Input Div M1         = 0
+    // 00     PLL Ouput Div M0         = 1
+    ccu.pll_audio0_ctrl
+        .write(|w| unsafe { w.bits(0xa90b_1701) });
+
+    // pg. 74 3.2.6.19 PLL_AUDIO0_PAT0_CTRL_REG
+    // 0x0178 PLL_AUDIO0 Pattern0 Control Register (Default Value: 0x0000_0000)
+    // Example: 1100_0000_0000_0001_0010_0110_1110_1001
+    //
+    // 31     Sigma-Delta Pattern Enable = 1
+    // 30:29  Spread Frequency Mode      = 10 = Triangular (1-bit)
+    // 28:20  Wave Step                  = 0_0000_0000
+    // 19     SDM Clock Select           = 0  = 24 MHz
+    // 18:17  Frequency                  = 00 = 31.5 kHz
+    // 16:00  Wave Bottom                = 1_0010_0110_1110_1001 = 0x1_26e9 = 75497
+    ccu.pll_audio0_pat0_ctrl
+        .write(|w| unsafe { w.bits(0xc001_26e9) });
+
+    // pg. 75 3.2.6.20 PLL_AUDIO0_PAT1_CTRL_REG
+    // 0x017C PLL_AUDIO0 Pattern1 Control Register (Default Value: 0x0000_0000)
+    //
+    // 31:25  ---
+    // 24     Dither Enable
+    // 23:21  ---
+    // 20     Fraction Enable
+    // 19:17  ---
+    // 16:00  Fraction In
+    ccu.pll_audio0_pat1_ctrl
+        .write(|w| unsafe { w.bits(0x0000_0000) });
+
+    // pg. 78 3.2.6.29 0x0378 PLL_AUDIO0_BIAS_REG
+    // PLL_AUDIO0 Bias Register (Default Value: 0x0003_0000)
+    //
+    // 31:21  ---
+    // 20:16  PLL bias control = 3
+    // 15:00  ---
+    ccu.pll_audio0_bias
+        .write(|w| unsafe { w.bits(0x0003_0000) });
+
+    // open audio codec bus clock gating and de-assert bus reset
+    //
+    // pg. 119 3.2.6.86 AUDIO_CODEC_BGR_REG
+    // 0x0A5C AUDIO_CODEC Bus Gating Reset Register (Default Value: 0x0000_0000)
+    //
+    // 31:17  ---
+    // 16     AUDIO_CODEC Reset            = 1 (0: Assert, 1: De-assert)
+    // 15:01  ---
+    // 00     Gating Clock for AUDIO_CODEC = 0 (0: Mask, 1: Pass)
+    ccu.audio_codec_bgr
+        .write(|w| unsafe { w.bits(0x0001_0000) });
+    ccu.audio_codec_bgr
+        .write(|w| unsafe { w.bits(0x0001_0001) });
+
+    // configure PLL_Audio0 frequency and enable PLL_Audio1
+    //
+    // pg. 117 3.2.6.84 AUDIO_CODEC_DAC_CLK_REG
+    // 0x0A50 AUDIO_CODEC_DAC Clock Register (Default Value: 0x0000_0000)
+    // Example: 1000_0000_0000_0000_0000_0000_0000_0000
+    //
+    // 31     Gating Clock        = 1     (0: off, 1: on)
+    // 30:27  ---
+    // 26:24  Clock Source Select = 000   (00: PLL_AUDIO0(1x), 01: PLL_AUDIO1(DIV2), 10: PLL_AUDIO1(DIV5))
+    // 23:10  ---
+    // 09:08  Factor N            = 00    (00: /1, 01: /2, 10: /4, 11: /8)
+    // 07:05  ---
+    // 04:00  Factor M            = 00000 (M = FACTOR_M + 1)
+    ccu.audio_codec_dac_clk
+        .write(|w| unsafe { w.bits(0x8000_0000) });
+
+    // TODO
+    // pg 118 3.2.6.85
+    // 0x0A54 AUDIO_CODEC_ADC Clock Register (Default Value: 0x0000_0000)
+}
+
+/// 8.4.4.2 Playback Process, page 769-770
+///
+/// ...
+/// 2. Configure the sample rate and data transfer format, then open
+///    the DAC.
+/// ...
+///
+/// Also see: sunxi_codec_hw_params()
+///           sunxi_codec_playback_prepare()
+fn configure_dac(codec: &AUDIOCODEC) {
+    use registers::ac_dac_fifoc_ext::{self, *};
+
+    // pg. 777 8.4.6.3 AC_DAC_FIFOC
+    // 0x0010 DAC FIFO Control Register (Default Value: 0x0000_4000)
+    // Default: 0000_0000_0000_0000_0100_0000_0000_0000
+    //
+    // 31:29  DAC_FS                 = x   (000: 48kHz,  010: 24kHz, 100: 12kHz,
+    //                                      110: 192kHz, 001: 32kHz, 011: 16kHz, 101: 8kHz,
+    //                                      111: 96kHz - Configure audio PLL for 44.1 etc.)
+    // 28     FIR_VER                = 0   (0: 64-tap, 1: 32-tap)
+    // 27     ---
+    // 26     SEND_LASAT             = 1   (0: send zero, 1: send last sample)
+    // 25:24  FIFO_MODE              = 01  (00: FIFO[19:0]=TXDAT[31:16], 01:FIFO[19:0]=TXDAT[15:0])
+    // 23     ---
+    // 22:21  DAC_DRQ_CLR_CNT        = 00  (00: WLEVEL > TXTL, 01: 4, 10: 8, 11: 16)
+    // 20:15  ---
+    // 14:08  TX_TRIG_LEVEL          = 00  (Default: 100_0000 = 0x40 = 64 = hald?)
+    // 07     ---
+    // 06     DAC_MONO_EN            = 00  (00: Stereo, 64 levels fifo, 01: 128 levels fifo)
+    // 05     TX_SAMPLE_BITS         = 0   (0: 16 bits, 1: 20 bits)
+    // 04     DAC_DRQ_EN             = 0
+    // 03     DAC_IRQ_EN             = 0
+    // 02     FIFO_UNDERRUN_IRQ_EN   = 0
+    // 01     FIFO_OVERRUN_IRQ_EN    = 9
+    // 00     FIFO_FLUSH             = 0   (0: self clear, 1: flush TX FIFO)
+
+    // - sunxi_codec_hw_params() --
+
+    let bits = codec.ac_dac_fifoc.read().bits();
+
+    // set DAC sample resolution
+    let bits = twiddle::set_range(bits, 24..25, 0b01); // FIFO Mode = [15:0] (little-endian)
+    let bits = twiddle::set(bits, 5, false);           // Sample Resolution = 16 bits
+
+    // set DAC sample rate
+    //codec.ac_dac_fifoc.modify(|_r, w| w.sample_rate(SampleRate::R48K));
+    //codec.ac_dac_fifoc.modify(|_r, w| w.sample_rate().r48k());
+    //let is_r48k = codec.ac_dac_fifoc.read().sample_rate().is_r48k();
+    let bits = twiddle::set_range(bits, 29..31, SampleRate::R48k.into());
+
+    // set DAC channels
+    let bits = twiddle::set(bits, 6, false); // DAC Mono Enable = false
+
+    // Write to register
+    codec.ac_dac_fifoc.write(|w| unsafe { w.bits(bits) });
+
+
+    // - sunxi_codec_playback_prepare --
+
+    // FIFO flush
+    let bits = codec.ac_dac_fifoc.read().bits();
+    let bits = twiddle::set(bits, 0, true);
+    codec.ac_dac_fifoc.write(|w| unsafe { w.bits(bits) });
+
+    // FIFO clear pending interrupts
+    //
+    // pg. 779 8.4.6.4 AC_DAC_FIFOS
+    // 0x0013 DAC FIFO Status Register (Default Value: 0x0080_8008)
+    //
+    // 31:24  ---
+    // 23     TX_EMPTY    (0: No room, 1: Room for more than one new sample)
+    // 22:08  TXE_CNT Empty Space
+    // 07:04  ---
+    // 03     TXE_INT Empty Pending Interrupt
+    // 02     TXU_INT Underrun Pending Interrupt
+    // 01     TXO_INT Overrun Pending Interrupt
+    // 00     ---
+    codec.ac_dac_fifos.write(|w| unsafe { w.bits(0b1110) });
+
+    // FIFO clear sample counter
+    //
+    // pg. 780 8.4.6. AC_DAC_CNT6
+    // 0x0024 DAC TX Counter Register (Default Value: 0x0000_0000)
+    //
+    // 31:00  TX_CNT TX Sample Counter
+    codec.ac_dac_cnt.write(|w| unsafe { w.bits(0b1110) });
+    let bits = codec.ac_dac_fifoc.read().bits();
+    let bits = twiddle::set(bits, 0, true);
+    codec.ac_dac_fifoc.write(|w| unsafe { w.bits(bits) });
+
+    // FIFO enable empty DRQ
+    let bits = codec.ac_dac_fifoc.read().bits();
+    let bits = twiddle::set(bits, 4, true);
+    codec.ac_dac_fifoc.write(|w| unsafe { w.bits(bits) });
+
+    // Enable DAC analog channels
+    //
+    // pg. 823 8.4.6.112 ADC1 Analog Control Register (Default Value: 0x001C_C055)
+    // 0x0300 ADC1_REG
+    //
+    // 31 ADC1_EN
+    // ...
+    //
+    // pg. 826 8.4.6.113 ADC2 Analog Control Register (Default Value: 0x001C_0055
+    // 0x0304 ADC2_REG
+    //
+    // 31 ADC2_EN
+    // ...
+    let adc1_reg = codec.adc1_reg.read().bits();
+    let adc1_reg = twiddle::set(adc1_reg, 31, true);
+    codec.adc1_reg.write(|w| unsafe { w.bits(adc1_reg) });
+    let adc2_reg = codec.adc2_reg.read().bits();
+    let adc2_reg = twiddle::set(adc2_reg, 31, true);
+    codec.adc2_reg.write(|w| unsafe { w.bits(adc2_reg) });
+
+    // Enable DAC digital part
+    //
+    // pg. 774 8.4.6.1 DAC Digital Part Control Register (Default Value: 0x0000_0000)
+    // 0x0000 AC_DAC_DPC
+    //
+    // 31  EN_DAC  DAC Digital Part Enable
+    // ...
+    let bits = codec.ac_dac_dpc.read().bits();
+    let bits = twiddle::set(bits, 31, true);
+    codec.ac_dac_dpc.write(|w| unsafe { w.bits(bits) });
+
+    // Enable left and right line out
+    //
+    // pg. 832 8.4.6.115 DAC Analog Control Register (Default Value: 0x0015_0000)
+    // 0x0310 DAC_REG
+    //
+    // 31:24  ---
+    // ...
+    // 15     DACL_EN ???
+    // 14     DACR_EN ???
+    // 13     LINEOUTLEN
+    // 12     LMUTE            (0: Mute, 1: Unmute)
+    // 11     LINEOUTREN
+    // 10     RMUTE            (0: Mute, 1: Unmute)
+    // 09:07  ---
+    // 06     LINEOUTL_DIFFEN
+    // 05     LINEOUTR_DIFFEN
+    // 04:00  LINEOUT_VOL_CTRL
+    let bits = codec.dac_reg.read().bits();
+    let bits = twiddle::set_range(bits, 10..13, 0b1111);
+    codec.dac_reg.write(|w| unsafe { w.bits(bits) });
+
+    // Turn on speaker ???
+    unsafe { riscv::asm::delay(1000); } // increase in case of pop
+    //let gpio = unsafe { pac::Peripherals::steal().GPIO };
+}
+
+/// 8.4.4.2 Playback Process, page 769-770
+///
+/// ...
+/// 3. Configure the DMA and DMA request.
+/// ...
+fn configure_dma(codec: &AUDIOCODEC) {
+}
+
+/// 8.4.4.2 Playback Process, page 769-770
+///
+/// ...
+/// 4. Enable the DAC DRQ and DMA.
+fn enable_dac_drq_dma(codec: &AUDIOCODEC) {
+}
+
+
+
+
+
+
+
+
+// - --------------------------------------------------------------------------
+
+/// Configure Mixer
+///
+/// Also see: d1-sdk.repo/lichee/brandy-2.0/u-boot-2018/drivers/sound/sun8iw18-codec.c
+///           sunxi_codec_init()
+pub(crate) fn configure_mixer(codec: &AUDIOCODEC) {
+    // set dac digital volume (0*-1.16=0dB)
+    codec
+        .ac_dac_dpc
+        .modify(|r, w| unsafe { w.bits(r.bits() | 0x0) }); // TODO check
+
+    // disable mic2, mic3 boost amplifier
+    let mic2_mic3_ctl = 0; // SUNXI_MIC2_MIC3_CTL: 0x308 + 0 = 0x308;
+    codec
+        .adc3_reg
+        .write(|w| unsafe { w.bits(0x44 << mic2_mic3_ctl) });
+    // OR
+    /*unsafe {
+        let ptr = codec.adc3_reg.as_ptr();
+        twiddle::reg_set(ptr, 0, false);
+    }*/
+
+    // mute ladc mixer
+    let ladcmix_src = 1; // SUNXI_LADCMIX_SRC: 0x308 + 1 = 0x309;
+    codec
+        .adc3_reg
+        .modify(|r, w| unsafe { w.bits(r.bits() | (0x00 << ladcmix_src)) }); // TODO check
+
+    // set lineout volume:  -(31-0x19)*1.5 = -9dB
+    let lineout_ctl1 = 2; // SUNXI_LINEOUT_CTL1: 0x304 + 2  = 0x306
+    codec
+        .adc2_reg
+        .modify(|r, w| unsafe { w.bits(r.bits() | (0x19 << lineout_ctl1)) }); // TODO check
+
+    // set right lineout source
+    let lineout_ctl0 = 1; // SUNXI_LINEOUT_CTL0: 0x304 + 1  = 0x305
+    codec
+        .adc2_reg
+        .modify(|r, w| unsafe { w.bits(r.bits() | (0x01 << lineout_ctl0)) }); // TODO check
+}
 
 pub(crate) fn prepare_playback(p: &pac::Peripherals) {
 
@@ -117,34 +435,28 @@ pub(crate) fn prepare_playback(p: &pac::Peripherals) {
     // enable dac digital part
 
     // enable left, right lineout
-
 }
 
 pub(crate) fn init_dma(p: &pac::Peripherals) {
     // - sunxi_dma_start ------------------------------------------------------
 
     // configure dma
-
 }
 
 pub(crate) fn start_audio(p: &pac::Peripherals) {
 
     // enable dac drq and dma
-
 }
 
 // - interrupts ---------------------------------------------------------------
 
 //use d1_pac::interrupt::Interrupt::AUDIO_CODEC;
 
-#[export_name = "AUDIO_CODEC"]
-fn AUDIO_CODEC() {
-}
+//#[export_name = "AUDIO_CODEC"]
+//fn AUDIO_CODEC() {
+//}
 
 //use d1_pac::Interrupt::AUDIO_CODEC;
-
-
-
 
 // - example code -------------------------------------------------------------
 //
