@@ -81,7 +81,7 @@ fn main() -> ! {
         }
 
         if counter % 5 == 0 {
-            println!("counter: {}", counter);
+            //println!("counter: {}", counter);
         }
 
         counter += 1;
@@ -110,21 +110,39 @@ extern "C" fn MachineExternal() {
         pac::Interrupt::DMAC_NS => {
             let dmac = unsafe { &*pac::DMAC::PTR };
 
-            // clear pending interrupts
-            dmac.dmac_irq_pend_reg0.write(|w| w.dma2_hlaf_irq_pend().set_bit());
-            while dmac.dmac_irq_pend_reg0.read().dma2_hlaf_irq_pend().bit_is_set() {}
-            dmac.dmac_irq_pend_reg0.write(|w| w.dma2_pkg_irq_pend().set_bit());
-            while dmac.dmac_irq_pend_reg0.read().dma2_pkg_irq_pend().bit_is_set() {}
-            //dmac.dmac_irq_pend_reg0.write(|w| w.dma2_queue_irq_pend().set_bit());
-            //while dmac.dmac_irq_pend_reg0.read().dma2_queue_irq_pend().bit_is_set() {}
-
+            // get some stats
             let packages = dmac.dmac_pkg_num_reg2.read().bits();
-            println!("DMAC_NS {}", packages);
+            let left = dmac.dmac_bcnt_left_reg2.read().bits();
+            //let bits = dmac.dmac_sta_reg.read().bits();
+            //let mbus = twiddle::bit(bits, 31);
+            //let chans = twiddle::range(bits, 0..15);
 
-            let bits = dmac.dmac_sta_reg.read().bits();
-            let mbus = twiddle::bit(bits, 31);
-            let chans = twiddle::range(bits, 0..15);
-            println!("DMAC_NS mbus:{} chans:{:#018b}", mbus, chans); // 0: idle, 1: busy
+            // get pending bits
+            let bits = dmac.dmac_irq_pend_reg0.read().bits();
+            let pending = twiddle::range(bits, 8..10);
+
+            // clear pending interrupts
+            if twiddle::bit(pending, 0) { // half package
+                dmac.dmac_irq_pend_reg0.write(|w| w.dma2_hlaf_irq_pend().set_bit());
+                while dmac.dmac_irq_pend_reg0.read().dma2_hlaf_irq_pend().bit_is_set() {}
+            }
+            if twiddle::bit(pending, 1) { // end of package
+                dmac.dmac_irq_pend_reg0.write(|w| w.dma2_pkg_irq_pend().set_bit());
+                while dmac.dmac_irq_pend_reg0.read().dma2_pkg_irq_pend().bit_is_set() {}
+            }
+            if twiddle::bit(pending, 2) { // end of queue
+                dmac.dmac_irq_pend_reg0.write(|w| w.dma2_queue_irq_pend().set_bit());
+                while dmac.dmac_irq_pend_reg0.read().dma2_queue_irq_pend().bit_is_set() {}
+            }
+
+            // dump some debug info
+            let counter = unsafe { COUNTER };
+            if counter % 1000 == 0 {
+                println!("DMAC_NS pend:{:#05b}", pending); // 0: idle, 1: busy
+                println!("DMAC_NS pkg:{}", packages);
+                println!("DMAC_NS left:{}\n", left);
+                //println!("DMAC_NS mbus:{} chans:{:#018b}", mbus, chans); // 0: idle, 1: busy
+            }
         }
         pac::Interrupt::AUDIO_CODEC => {
             let audio_codec = unsafe { &*pac::AUDIOCODEC::PTR };
@@ -140,7 +158,6 @@ extern "C" fn MachineExternal() {
                 //let mut ac_dac_txdata = unsafe { &*AUDIOCODEC::PTR }.ac_dac_txdata;
                 const AC_DAC_TXDATA: *mut u32 = (audio_codec::SUNXI_AUDIO_CODEC + 0x0020) as *mut u32;
                 let sample = audio_codec::TX_BUFFER[COUNTER];
-                COUNTER += 1;
                 if COUNTER == audio_codec::TX_BUFFER.len() {
                     COUNTER = 0;
                 }
@@ -190,6 +207,8 @@ extern "C" fn MachineExternal() {
             //panic!("unexpected claim");
         }
     }
+
+    unsafe { COUNTER += 1 };
 
     // Release claim
     plic.complete(claim);

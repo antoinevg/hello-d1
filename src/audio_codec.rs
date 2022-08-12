@@ -68,6 +68,7 @@ use core::ptr::NonNull;
 use d1_pac as pac;
 use pac::{AUDIOCODEC, CCU};
 
+use crate::dmac::descriptor::Descriptor;
 use crate::dmac::{self, descriptor, descriptor::DescriptorConfig, Dmac};
 use twiddle;
 use crate::println;
@@ -439,10 +440,11 @@ fn configure_dac(codec: &AUDIOCODEC) {
     //     .modify(|r, w| unsafe { w.bits(r.bits() | (0 << PB12)) });
 }
 
-pub const BLOCK_LENGTH: usize = 128;
+pub const BLOCK_LENGTH: usize = 64;
 pub const STEREO_BLOCK_LENGTH: usize = BLOCK_LENGTH * 2;    // 2 channels
 pub const TX_BUFFER_LENGTH:usize = STEREO_BLOCK_LENGTH * 2; // 2 half-blocks
-pub static mut TX_BUFFER: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
+pub static mut TX_BUFFER_1: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
+pub static mut TX_BUFFER_2: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
 
 /// 8.4.4.2 Playback Process, page 769-770
 ///
@@ -461,8 +463,15 @@ fn enable_dac_drq_dma(codec: &AUDIOCODEC, dmac: &mut Dmac) {
     // generate some test noise
     unsafe {
         let mut counter = 0;
-        for byte in &mut TX_BUFFER {
-            *byte = ((u32::MAX / TX_BUFFER.len() as u32)  * counter) as u32;
+        for byte in &mut TX_BUFFER_1 {
+            *byte = ((u32::MAX / TX_BUFFER_1.len() as u32)  * counter) as u32;
+            counter += 1;
+        }
+    }
+    unsafe {
+        let mut counter = 0;
+        for byte in &mut TX_BUFFER_2 {
+            *byte = ((u32::MAX / TX_BUFFER_2.len() as u32)  * counter) as u32;
             counter += 1;
         }
     }
@@ -473,29 +482,52 @@ fn enable_dac_drq_dma(codec: &AUDIOCODEC, dmac: &mut Dmac) {
     let bits = twiddle::set(bits, 3, true); // DAC_IRQ_EN
     codec.ac_dac_fifoc.write(|w| unsafe { w.bits(bits) });
 
+    // TODO pg. 225  make sure that TX_BUFFER_1 is word-aligned
+
     // enable dma
     let ac_dac_txdata = &unsafe { &*AUDIOCODEC::PTR }.ac_dac_txdata as *const _ as *mut ();
     let descriptor_config = descriptor::DescriptorConfig {
-        source: unsafe { TX_BUFFER.as_ptr().cast() },
+        // memory
+        source: unsafe { TX_BUFFER_1.as_ptr().cast() },
         destination: ac_dac_txdata,
-        byte_counter: unsafe { TX_BUFFER.len() },
+        byte_counter: unsafe { TX_BUFFER_1.len() },       // ???
+        // byte_counter: unsafe { TX_BUFFER_LENGTH * 4 }, // ???
+        // config
         link: None,
         wait_clock_cycles: 0,
         bmode: descriptor::BModeSel::Normal,
+        // destination
         dest_width: descriptor::DataWidth::Bit32,
         dest_addr_mode: descriptor::AddressMode::IoMode,
         dest_block_size: descriptor::BlockSize::Byte4,
         dest_drq_type: descriptor::DestDrqType::AudioCodec,
+        // source
         src_data_width: descriptor::DataWidth::Bit32,
         src_addr_mode: descriptor::AddressMode::LinearMode,
-        src_block_size: descriptor::BlockSize::Byte1,
+        src_block_size: descriptor::BlockSize::Byte4,
         src_drq_type: descriptor::SrcDrqType::Dram,
     };
-    let descriptor = descriptor_config.try_into().unwrap();
+    let mut descriptor_config_2 = descriptor_config.clone();;
+
+    let mut descriptor_1: Descriptor = descriptor_config.try_into().unwrap();
+
+    // link descriptor_1 to descriptor_2
+    let descriptor_1_ptr = &descriptor_1 as* const Descriptor as *const ();
+    descriptor_config_2.source = unsafe { TX_BUFFER_2.as_ptr().cast() };
+    descriptor_config_2.link = Some(descriptor_1_ptr);
+    let descriptor_2: Descriptor = descriptor_config_2.try_into().unwrap();
+
+    // link descriptor_2 to descriptor_1
+    let descriptor_2_ptr = &descriptor_2 as* const Descriptor as *const ();
+    descriptor_1.link = descriptor_2_ptr as u32;
+    descriptor_1.link |= ((descriptor_2_ptr as usize >> 32) as u32) & 0b11;
 
     unsafe {
         dmac.channels[2].set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Handshake);
-        dmac.channels[2].start_descriptor(NonNull::from(&descriptor));
+        //dmac.channels[2].set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Handshake);
+        //dmac.channels[2].set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
+        //dmac.channels[2].set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Wait);
+        dmac.channels[2].start_descriptor(NonNull::from(&descriptor_1));
     }
 }
 

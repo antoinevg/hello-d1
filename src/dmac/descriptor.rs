@@ -6,10 +6,11 @@ pub struct Descriptor {
     destination_address: u32,
     byte_counter: u32,
     parameter: u32,
-    link: u32,
+    pub link: u32,
 }
 
 // TODO: THIS COULD PROBABLY BE A BITFIELD LIBRARY
+#[derive(Clone)]
 pub struct DescriptorConfig {
     pub source: *const (),
     pub destination: *mut (),
