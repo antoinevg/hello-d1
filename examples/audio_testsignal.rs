@@ -25,31 +25,28 @@ fn main() -> ! {
     // trim bandgap reference voltage ???
     audio_codec::trim_bandgap_ref_voltage();
 
-    // gpio - PE8
-    let gpio = &p.GPIO;
-    const PE8: u32 = 8;
-    gpio.pe_cfg1.modify(|_, w| w.pe8_select().pe_eint8());
-    gpio.pe_pull0.write(|w| w.pe8_pull().pull_up());
-    gpio.pe_eint_cfg1.modify(|_, w| w.eint8_cfg().double_edge());
-    gpio.pe_eint_ctl.modify(|_, w| w.eint8_ctl().enable());
-
     // gpio - led
+    let gpio = &p.GPIO;
     const PC1: u32 = 1;
     gpio.pc_cfg0.write(|w| w.pc1_select().output());
 
     // ccu
     let mut ccu = p.CCU;
 
+    // dmac
+    let mut dmac = dmac::Dmac::new(p.DMAC, &mut ccu);
+
+    // audio_codec
+    let audio_codec = audio_codec::AudioCodec::new(p.AUDIOCODEC, &mut ccu, &mut dmac);
+
     // plic
     let plic = plic::Plic::new(p.PLIC);
     unsafe {
-        //plic.set_priority(pac::Interrupt::GPIOE_NS, plic::Priority::P1);
         plic.set_priority(pac::Interrupt::DMAC_NS, plic::Priority::P10);
-        //plic.set_priority(pac::Interrupt::AUDIO_CODEC, plic::Priority::P1);
+        plic.set_priority(pac::Interrupt::AUDIO_CODEC, plic::Priority::P1);
 
-        //plic.unmask(pac::Interrupt::GPIOE_NS);
         plic.unmask(pac::Interrupt::DMAC_NS);
-        //plic.unmask(pac::Interrupt::AUDIO_CODEC);
+        plic.unmask(pac::Interrupt::AUDIO_CODEC);
     }
 
     // enable interrupts
@@ -58,14 +55,8 @@ fn main() -> ! {
         riscv::register::mie::set_mext();
     }
 
-    // dmac
-    let mut dmac = dmac::Dmac::new(p.DMAC, &mut ccu);
-
-    // audio_codec
-    let audio_codec = audio_codec::AudioCodec::new(p.AUDIOCODEC, &mut ccu, &mut dmac);
+    // audio_codec - start
     audio_codec.start(&mut dmac);
-
-    let mut counter = 0;
 
     // blinky
     loop {
@@ -79,12 +70,6 @@ fn main() -> ! {
         unsafe {
             riscv::asm::delay(100_000_000);
         }
-
-        if counter % 5 == 0 {
-            //println!("counter: {}", counter);
-        }
-
-        counter += 1;
     }
 }
 
@@ -147,9 +132,27 @@ extern "C" fn MachineExternal() {
         pac::Interrupt::AUDIO_CODEC => {
             let audio_codec = unsafe { &*pac::AUDIOCODEC::PTR };
 
-            let count = audio_codec.ac_adc_cnt.read().bits();
-            if count != 0 {
-                println!("ac_adc_cnt: {:#034b}", count);
+            // clear all pending interrupts
+            let bits = audio_codec.ac_dac_fifos.read().bits();
+            let bits = twiddle::set_range(bits, 1..3, 0b111);
+            audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });
+            loop {
+                let bits = audio_codec.ac_dac_fifos.read().bits();
+                if twiddle::range(bits, 1..3) == 0 {
+                    break;
+                }
+            }
+
+            //let bits = audio_codec.ac_dac_fifos.read().bits();
+            //let bits = twiddle::range(bits, 1..3);
+            //println!("ac_dac_fifos: {:#05b}", bits);
+
+            // dump some debug info
+            let counter = unsafe { COUNTER };
+            if counter % 30000 == 0 {
+                let count = audio_codec.ac_dac_cnt.read().bits();
+                //println!("ac_dac_cnt: {:#034b} -> {}", count, counter);
+                println!("ac_dac_cnt: {}", count);
             }
 
             /*unsafe {
@@ -176,9 +179,9 @@ extern "C" fn MachineExternal() {
             /*for _ in 0..10 {
                 let bits = audio_codec.ac_dac_fifos.read().bits();
                 println!("1 {:#05b}", twiddle::range(bits, 1..3));
-                let bits = twiddle::set(bits, 3, true);
-                //let bits = twiddle::set(bits, 2, true);
-                //let bits = twiddle::set(bits, 1, true);
+                let bits = twiddle::set(bits, 2, true);
+                let bits = twiddle::set(bits, 1, true);
+                let bits = twiddle::set(bits, 0, true);
                 audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });
                 unsafe { riscv::asm::delay(50); }
                 //audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(0b1000) });
@@ -189,7 +192,7 @@ extern "C" fn MachineExternal() {
             }
             panic!();*/
 
-            let bits = audio_codec.ac_dac_fifos.read().bits();
+            /*let bits = audio_codec.ac_dac_fifos.read().bits();
             if twiddle::bit(bits, 3) {
                 let bits = twiddle::set(bits, 3, true);
             }
@@ -199,7 +202,7 @@ extern "C" fn MachineExternal() {
             if twiddle::bit(bits, 1) {
                 let bits = twiddle::set(bits, 1, true);
             }
-            audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });
+            audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });*/
 
         }
         x => {
