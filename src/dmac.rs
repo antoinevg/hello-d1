@@ -29,11 +29,11 @@ impl Dmac {
     pub fn new(dmac: DMAC, ccu: &mut CCU) -> Self {
         ccu.dma_bgr.write(|w| w.gating().pass().rst().deassert());
         // disable auto-gating, probably not needed?
-        dmac.dmac_auto_gate_reg.write(
+        /*dmac.dmac_auto_gate_reg.write(
             |w| w.dma_chan_circuit().set_bit()
                 .dma_common_circuit().set_bit()
                 .dma_mclk_circuit().set_bit()
-        );
+        );*/
         Self {
             dmac,
             channels: [
@@ -56,6 +56,18 @@ impl Dmac {
             ],
         }
     }
+
+    // TODO
+    pub unsafe fn irq_en_reg0(&self) -> &Reg<DMAC_IRQ_EN_REG0_SPEC> {
+        let dmac = &*DMAC::PTR;
+        &dmac.dmac_irq_en_reg0
+    }
+
+    // TODO
+    pub unsafe fn irq_en_reg1(&self) -> &Reg<DMAC_IRQ_EN_REG1_SPEC> {
+        let dmac = &*DMAC::PTR;
+        &dmac.dmac_irq_en_reg1
+    }
 }
 
 pub struct Channel {
@@ -63,6 +75,11 @@ pub struct Channel {
 }
 
 impl Channel {
+    pub unsafe fn summon_channel(idx: u8) -> Channel {
+        assert!(idx < 16);
+        Self { idx }
+    }
+
     pub unsafe fn desc_addr_reg(&self) -> &Reg<DMAC_DESC_ADDR_REG_SPEC> {
         let dmac = &*DMAC::PTR;
         match self.idx {
@@ -132,38 +149,6 @@ impl Channel {
         }
     }
 
-    // TODO
-    pub unsafe fn irq_en_reg0(&self) -> &Reg<DMAC_IRQ_EN_REG0_SPEC> {
-        let dmac = &*DMAC::PTR;
-        match self.idx {
-            0 => &dmac.dmac_irq_en_reg0,
-            1 => &dmac.dmac_irq_en_reg0,
-            2 => &dmac.dmac_irq_en_reg0,
-            3 => &dmac.dmac_irq_en_reg0,
-            4 => &dmac.dmac_irq_en_reg0,
-            5 => &dmac.dmac_irq_en_reg0,
-            6 => &dmac.dmac_irq_en_reg0,
-            7 => &dmac.dmac_irq_en_reg0,
-            _ => panic!(),
-        }
-    }
-
-    // TODO
-    pub unsafe fn irq_en_reg1(&self) -> &Reg<DMAC_IRQ_EN_REG1_SPEC> {
-        let dmac = &*DMAC::PTR;
-        match self.idx {
-            8 => &dmac.dmac_irq_en_reg1,
-            9 => &dmac.dmac_irq_en_reg1,
-            10 => &dmac.dmac_irq_en_reg1,
-            11 => &dmac.dmac_irq_en_reg1,
-            12 => &dmac.dmac_irq_en_reg1,
-            13 => &dmac.dmac_irq_en_reg1,
-            14 => &dmac.dmac_irq_en_reg1,
-            15 => &dmac.dmac_irq_en_reg1,
-            _ => panic!(),
-        }
-    }
-
     pub unsafe fn set_channel_modes(&mut self, src: ChannelMode, dst: ChannelMode) {
         self.mode_reg().write(|w| {
             match src {
@@ -183,13 +168,6 @@ impl Channel {
 
         fence(Ordering::SeqCst); //////
 
-        // TODO only handles channel 0
-        self.irq_en_reg0().write(
-            |w| w//.dma2_hlaf_irq_en().set_bit()
-                .dma2_pkg_irq_en().set_bit()
-                .dma2_queue_irq_en().set_bit()
-        );
-
         let desc_addr = desc.as_ptr() as usize;
         self.desc_addr_reg().write(|w| {
             w.dma_desc_addr().variant((desc_addr >> 2) as u32);
@@ -204,19 +182,6 @@ impl Channel {
 
     pub unsafe fn stop_dma(&mut self) {
         self.en_reg().write(|w| w.dma_en().disabled());
-
-        fence(Ordering::SeqCst); //////
-    }
-
-    pub unsafe fn clear_pending(&mut self) {
-        fence(Ordering::SeqCst); //////
-
-        let dmac = &*DMAC::PTR;
-        dmac.dmac_irq_pend_reg0.write(
-            |w| w.dma2_hlaf_irq_pend().set_bit()
-                .dma2_pkg_irq_pend().set_bit()
-                .dma2_queue_irq_pend().set_bit()
-        );
 
         fence(Ordering::SeqCst); //////
     }

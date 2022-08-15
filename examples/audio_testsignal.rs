@@ -23,7 +23,7 @@ fn main() -> ! {
     println!("🦀 Hello Lichee RV D1!");
 
     // trim bandgap reference voltage ???
-    audio_codec::trim_bandgap_ref_voltage();
+    //audio_codec::trim_bandgap_ref_voltage();
 
     // gpio - led
     let gpio = &p.GPIO;
@@ -33,11 +33,11 @@ fn main() -> ! {
     // ccu
     let mut ccu = p.CCU;
 
+    // audio_codec
+    let audio_codec = audio_codec::AudioCodec::new(p.AUDIOCODEC, &mut ccu);
+
     // dmac
     let mut dmac = dmac::Dmac::new(p.DMAC, &mut ccu);
-
-    // audio_codec
-    let audio_codec = audio_codec::AudioCodec::new(p.AUDIOCODEC, &mut ccu, &mut dmac);
 
     // plic
     let plic = plic::Plic::new(p.PLIC);
@@ -134,12 +134,22 @@ extern "C" fn MachineExternal() {
 
             // clear all pending interrupts
             let bits = audio_codec.ac_dac_fifos.read().bits();
-            let bits = twiddle::set_range(bits, 1..3, 0b111);
+            if twiddle::bit(bits, 3) {
+                let bits = twiddle::set(bits, 3, true);
+            }
+            if twiddle::bit(bits, 2) {
+                let bits = twiddle::set(bits, 2, true);
+            }
+            if twiddle::bit(bits, 1) {
+                let bits = twiddle::set(bits, 1, true);
+            }
             audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });
             loop {
                 let bits = audio_codec.ac_dac_fifos.read().bits();
                 if twiddle::range(bits, 1..3) == 0 {
                     break;
+                } else {
+                    println!("FUCK: {:#034b}", bits);
                 }
             }
 
@@ -155,54 +165,6 @@ extern "C" fn MachineExternal() {
                 println!("ac_dac_cnt: {}", count);
             }
 
-            /*unsafe {
-                //let AUDIOCODEC = d1_pac::Peripherals::steal().AUDIOCODEC;
-                //let ac_dac_txdata = &unsafe { &*AUDIOCODEC::PTR }.ac_dac_txdata as *const _ as *mut ();
-                //let mut ac_dac_txdata = unsafe { &*AUDIOCODEC::PTR }.ac_dac_txdata;
-                const AC_DAC_TXDATA: *mut u32 = (audio_codec::SUNXI_AUDIO_CODEC + 0x0020) as *mut u32;
-                let sample = audio_codec::TX_BUFFER[COUNTER];
-                if COUNTER == audio_codec::TX_BUFFER.len() {
-                    COUNTER = 0;
-                }
-                core::ptr::write_volatile(AC_DAC_TXDATA, sample);
-                let bits = audio_codec.ac_dac_fifoc.read().bits();
-                let bits = twiddle::set(bits, 0, true);
-                audio_codec.ac_dac_fifoc.write(|w| w.bits(bits));
-            }*/
-
-            // Wait for the interrupt to clear to avoid repeat interrupts
-            //
-            // 03     TXE_INT Empty Pending Interrupt
-            // 02     TXU_INT Underrun Pending Interrupt
-            // 01     TXO_INT Overrun Pending Interrupt
-            //
-            /*for _ in 0..10 {
-                let bits = audio_codec.ac_dac_fifos.read().bits();
-                println!("1 {:#05b}", twiddle::range(bits, 1..3));
-                let bits = twiddle::set(bits, 2, true);
-                let bits = twiddle::set(bits, 1, true);
-                let bits = twiddle::set(bits, 0, true);
-                audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });
-                unsafe { riscv::asm::delay(50); }
-                //audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(0b1000) });
-                //audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(0b0100) });
-                //audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(0b0010) });
-                let bits = audio_codec.ac_dac_fifos.read().bits();
-                println!("2 {:#05b}", twiddle::range(bits, 1..3));
-            }
-            panic!();*/
-
-            /*let bits = audio_codec.ac_dac_fifos.read().bits();
-            if twiddle::bit(bits, 3) {
-                let bits = twiddle::set(bits, 3, true);
-            }
-            if twiddle::bit(bits, 2) {
-                let bits = twiddle::set(bits, 2, true);
-            }
-            if twiddle::bit(bits, 1) {
-                let bits = twiddle::set(bits, 1, true);
-            }
-            audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });*/
 
         }
         x => {
