@@ -8,11 +8,12 @@ edition = "2021"
 riscv = { git = "https://github.com/rust-embedded/riscv" }
 riscv-rt = "=0.9.0"
 #d1-pac = { version = "=0.0.27", features = ["rt"] }
-#d1-pac = { path = "../upstream/d1-temp", features = ["rt"] }
-d1-pac = { git = "https://github.com/antoinevg/aw-pac", branch = "antoinevg/audio_codec", features = ["rt"] }
+d1-pac = { path = "../upstream/d1-temp", features = ["rt"] }
+#d1-pac = { git = "https://github.com/antoinevg/aw-pac", branch = "antoinevg/audio_codec", features = ["rt"] }
 panic-halt = "=0.2.0"
 
-twiddle = { path = "../twiddle.git" }
+#twiddle = { path = "../twiddle.git" }
+twiddle = { git = "https://github.com/antoinevg//twiddle" }
 
 [profile.release]
 codegen-units = 1
