@@ -66,27 +66,27 @@ pub(crate) mod registers;
 use core::ptr::NonNull;
 
 use d1_pac as pac;
-use pac::{AUDIOCODEC, CCU};
+use pac::{AUDIO_CODEC, CCU};
 
 use crate::dmac::descriptor::Descriptor;
 use crate::dmac::{self, descriptor, descriptor::DescriptorConfig, Dmac};
 use twiddle;
 use crate::println;
 
-use registers::ac_dac_fifoc_ext;
-use registers::ac_dac_fifoc_ext::Rext;
-use registers::ac_dac_fifoc_ext::Wext;
+//use registers::ac_dac_fifoc_ext;
+//use registers::ac_dac_fifoc_ext::Rext;
+//use registers::ac_dac_fifoc_ext::Wext;
 
 /// Built-in audio codec
 pub struct AudioCodec {
-    audio_codec: AUDIOCODEC,
+    audio_codec: AUDIO_CODEC,
 }
 
 impl AudioCodec {
     /// Create a new `AudioCodec`
     ///
     /// TODO replace magic numbers with register methods
-    pub fn new(audio_codec: AUDIOCODEC, ccu: &mut CCU) -> AudioCodec {
+    pub fn new(audio_codec: AUDIO_CODEC, ccu: &mut CCU) -> AudioCodec {
         init_codec_ccu(ccu); // 1
         configure_dac(&audio_codec); // 2
 
@@ -108,7 +108,7 @@ impl AudioCodec {
     /// 'Tis thine responsibility, that which thou doth summon.
     pub unsafe fn summon() -> Self {
         Self {
-            audio_codec: d1_pac::Peripherals::steal().AUDIOCODEC,
+            audio_codec: d1_pac::Peripherals::steal().AUDIO_CODEC,
         }
     }
 }
@@ -116,7 +116,7 @@ impl AudioCodec {
 // ----------------------------------------------------------------------------
 
 /// TODO Debug mode
-fn enable_debug_mode(audio_codec: &AUDIOCODEC) {
+fn enable_debug_mode(audio_codec: &AUDIO_CODEC) {
     let bits = audio_codec.ac_dac_dg.read().bits();
     twiddle::set(bits, 11, true); // DAC_MODU_SELECT (0: Normal, 1: Debug)
     twiddle::set_range(bits, 9..10, 0b01); // DAC_PATTERN_SELECT (0b00: Normal, 0b01: -6 dB Sine wave)
@@ -266,8 +266,8 @@ fn init_codec_ccu(ccu: &CCU) {
 ///
 /// Also see: sunxi_codec_hw_params()
 ///           sunxi_codec_playback_prepare()
-fn configure_dac(codec: &AUDIOCODEC) {
-    use registers::ac_dac_fifoc_ext::{self, *};
+fn configure_dac(codec: &AUDIO_CODEC) {
+    //use registers::ac_dac_fifoc_ext::{self, *};
 
     // pg. 777 8.4.6.3 AC_DAC_FIFOC
     // 0x0010 DAC FIFO Control Register (Default Value: 0x0000_4000)
@@ -395,7 +395,7 @@ fn configure_dac(codec: &AUDIOCODEC) {
 }
 
 
-fn configure_mixer(codec: &AUDIOCODEC) {
+fn configure_mixer(codec: &AUDIO_CODEC) {
     // Enable left and right line out
     //
     // pg. 832 8.4.6.115 DAC Analog Control Register (Default Value: 0x0015_0000)
@@ -413,10 +413,10 @@ fn configure_mixer(codec: &AUDIOCODEC) {
     // 06     LINEOUTL_DIFFEN
     // 05     LINEOUTR_DIFFEN
     // 04:00  LINEOUT_VOL_CTRL (0x1f to 0x02, step=-1.5dB, mute = 0 or 1)
-    let bits = codec.dac_reg.read().bits();
+    let bits = codec.dac.read().bits();
     let bits = twiddle::set_range(bits, 10..15, 0b11_1111);
     let bits = twiddle::set_range(bits, 0..4, 0x1f);
-    codec.dac_reg.write(|w| unsafe { w.bits(bits) });
+    codec.dac.write(|w| unsafe { w.bits(bits) });
 
     // Enable headphone output
     //
@@ -475,7 +475,7 @@ pub static mut TX_BUFFER_2: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
 /// ...
 /// 3. Configure the DMA and DMA request.
 /// ...
-fn configure_dma(codec: &AUDIOCODEC, dmac: &mut Dmac) {
+fn configure_dma(codec: &AUDIO_CODEC, dmac: &mut Dmac) {
     // TODO move dma config here
 }
 
@@ -483,7 +483,7 @@ fn configure_dma(codec: &AUDIOCODEC, dmac: &mut Dmac) {
 ///
 /// ...
 /// 4. Enable the DAC DRQ and DMA.
-fn enable_dac_drq_dma(codec: &AUDIOCODEC, dmac: &mut Dmac) {
+fn enable_dac_drq_dma(codec: &AUDIO_CODEC, dmac: &mut Dmac) {
     // generate some test noise
     unsafe {
         let mut counter = 0;
@@ -503,7 +503,7 @@ fn enable_dac_drq_dma(codec: &AUDIOCODEC, dmac: &mut Dmac) {
     // TODO pg. 225  make sure that TX_BUFFER_1 is word-aligned
 
     // enable dma
-    let ac_dac_txdata = &unsafe { &*AUDIOCODEC::PTR }.ac_dac_txdata as *const _ as *mut ();
+    let ac_dac_txdata = &unsafe { &*AUDIO_CODEC::PTR }.ac_dac_txdata as *const _ as *mut ();
     let descriptor_config = descriptor::DescriptorConfig {
         // memory
         source: unsafe { TX_BUFFER_1.as_ptr().cast() },
@@ -544,7 +544,7 @@ fn enable_dac_drq_dma(codec: &AUDIOCODEC, dmac: &mut Dmac) {
         let channel = 2;
 
         // enable interrupts
-        dmac.irq_en_reg0().write(
+        dmac.irq_en0().write(
             |w| w//.dma2_hlaf_irq_en().set_bit()
                 .dma2_pkg_irq_en().set_bit()
                 .dma2_queue_irq_en().set_bit()

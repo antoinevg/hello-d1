@@ -34,7 +34,7 @@ fn main() -> ! {
     let mut ccu = p.CCU;
 
     // audio_codec
-    let audio_codec = audio_codec::AudioCodec::new(p.AUDIOCODEC, &mut ccu);
+    let audio_codec = audio_codec::AudioCodec::new(p.AUDIO_CODEC, &mut ccu);
 
     // dmac
     let mut dmac = dmac::Dmac::new(p.DMAC, &mut ccu);
@@ -96,28 +96,28 @@ extern "C" fn MachineExternal() {
             let dmac = unsafe { &*pac::DMAC::PTR };
 
             // get some stats
-            let packages = dmac.dmac_pkg_num_reg2.read().bits();
-            let left = dmac.dmac_bcnt_left_reg2.read().bits();
-            //let bits = dmac.dmac_sta_reg.read().bits();
+            let packages = dmac.dmac_pkg_num2.read().bits();
+            let left = dmac.dmac_bcnt_left2.read().bits();
+            //let bits = dmac.dmac_sta.read().bits();
             //let mbus = twiddle::bit(bits, 31);
             //let chans = twiddle::range(bits, 0..15);
 
             // get pending bits
-            let bits = dmac.dmac_irq_pend_reg0.read().bits();
+            let bits = dmac.dmac_irq_pend0.read().bits();
             let pending = twiddle::range(bits, 8..10);
 
             // clear pending interrupts
             if twiddle::bit(pending, 0) { // half package
-                dmac.dmac_irq_pend_reg0.write(|w| w.dma2_hlaf_irq_pend().set_bit());
-                while dmac.dmac_irq_pend_reg0.read().dma2_hlaf_irq_pend().bit_is_set() {}
+                dmac.dmac_irq_pend0.write(|w| w.dma2_hlaf_irq_pend().set_bit());
+                while dmac.dmac_irq_pend0.read().dma2_hlaf_irq_pend().bit_is_set() {}
             }
             if twiddle::bit(pending, 1) { // end of package
-                dmac.dmac_irq_pend_reg0.write(|w| w.dma2_pkg_irq_pend().set_bit());
-                while dmac.dmac_irq_pend_reg0.read().dma2_pkg_irq_pend().bit_is_set() {}
+                dmac.dmac_irq_pend0.write(|w| w.dma2_pkg_irq_pend().set_bit());
+                while dmac.dmac_irq_pend0.read().dma2_pkg_irq_pend().bit_is_set() {}
             }
             if twiddle::bit(pending, 2) { // end of queue
-                dmac.dmac_irq_pend_reg0.write(|w| w.dma2_queue_irq_pend().set_bit());
-                while dmac.dmac_irq_pend_reg0.read().dma2_queue_irq_pend().bit_is_set() {}
+                dmac.dmac_irq_pend0.write(|w| w.dma2_queue_irq_pend().set_bit());
+                while dmac.dmac_irq_pend0.read().dma2_queue_irq_pend().bit_is_set() {}
             }
 
             // dump some debug info
@@ -130,7 +130,7 @@ extern "C" fn MachineExternal() {
             }
         }
         pac::Interrupt::AUDIO_CODEC => {
-            let audio_codec = unsafe { &*pac::AUDIOCODEC::PTR };
+            let audio_codec = unsafe { &*pac::AUDIO_CODEC::PTR };
 
             // clear all pending interrupts
             let bits = audio_codec.ac_dac_fifos.read().bits();

@@ -7,11 +7,11 @@ use d1_pac::{
     CCU,
     DMAC,
     dmac::{
-        dmac_desc_addr_reg::DMAC_DESC_ADDR_REG_SPEC,
-        dmac_en_reg::DMAC_EN_REG_SPEC,
-        dmac_mode_reg::DMAC_MODE_REG_SPEC,
-        dmac_irq_en_reg0::DMAC_IRQ_EN_REG0_SPEC,
-        dmac_irq_en_reg1::DMAC_IRQ_EN_REG1_SPEC,
+        dmac_desc_addr::DMAC_DESC_ADDR_SPEC,
+        dmac_en::DMAC_EN_SPEC,
+        dmac_mode::DMAC_MODE_SPEC,
+        dmac_irq_en0::DMAC_IRQ_EN0_SPEC,
+        dmac_irq_en1::DMAC_IRQ_EN1_SPEC,
     },
     generic::Reg
 };
@@ -29,7 +29,7 @@ impl Dmac {
     pub fn new(dmac: DMAC, ccu: &mut CCU) -> Self {
         ccu.dma_bgr.write(|w| w.gating().pass().rst().deassert());
         // disable auto-gating, probably not needed?
-        /*dmac.dmac_auto_gate_reg.write(
+        /*dmac.dmac_auto_gate.write(
             |w| w.dma_chan_circuit().set_bit()
                 .dma_common_circuit().set_bit()
                 .dma_mclk_circuit().set_bit()
@@ -58,15 +58,15 @@ impl Dmac {
     }
 
     // TODO
-    pub unsafe fn irq_en_reg0(&self) -> &Reg<DMAC_IRQ_EN_REG0_SPEC> {
+    pub unsafe fn irq_en0(&self) -> &Reg<DMAC_IRQ_EN0_SPEC> {
         let dmac = &*DMAC::PTR;
-        &dmac.dmac_irq_en_reg0
+        &dmac.dmac_irq_en0
     }
 
     // TODO
-    pub unsafe fn irq_en_reg1(&self) -> &Reg<DMAC_IRQ_EN_REG1_SPEC> {
+    pub unsafe fn irq_en1(&self) -> &Reg<DMAC_IRQ_EN1_SPEC> {
         let dmac = &*DMAC::PTR;
-        &dmac.dmac_irq_en_reg1
+        &dmac.dmac_irq_en1
     }
 }
 
@@ -80,77 +80,77 @@ impl Channel {
         Self { idx }
     }
 
-    pub unsafe fn desc_addr_reg(&self) -> &Reg<DMAC_DESC_ADDR_REG_SPEC> {
+    pub unsafe fn desc_addr(&self) -> &Reg<DMAC_DESC_ADDR_SPEC> {
         let dmac = &*DMAC::PTR;
         match self.idx {
-            0 => &dmac.dmac_desc_addr_reg0,
-            1 => &dmac.dmac_desc_addr_reg1,
-            2 => &dmac.dmac_desc_addr_reg2,
-            3 => &dmac.dmac_desc_addr_reg3,
-            4 => &dmac.dmac_desc_addr_reg4,
-            5 => &dmac.dmac_desc_addr_reg5,
-            6 => &dmac.dmac_desc_addr_reg6,
-            7 => &dmac.dmac_desc_addr_reg7,
-            8 => &dmac.dmac_desc_addr_reg8,
-            9 => &dmac.dmac_desc_addr_reg9,
-            10 => &dmac.dmac_desc_addr_reg10,
-            11 => &dmac.dmac_desc_addr_reg11,
-            12 => &dmac.dmac_desc_addr_reg12,
-            13 => &dmac.dmac_desc_addr_reg13,
-            14 => &dmac.dmac_desc_addr_reg14,
-            15 => &dmac.dmac_desc_addr_reg15,
+            0 => &dmac.dmac_desc_addr0,
+            1 => &dmac.dmac_desc_addr1,
+            2 => &dmac.dmac_desc_addr2,
+            3 => &dmac.dmac_desc_addr3,
+            4 => &dmac.dmac_desc_addr4,
+            5 => &dmac.dmac_desc_addr5,
+            6 => &dmac.dmac_desc_addr6,
+            7 => &dmac.dmac_desc_addr7,
+            8 => &dmac.dmac_desc_addr8,
+            9 => &dmac.dmac_desc_addr9,
+            10 => &dmac.dmac_desc_addr10,
+            11 => &dmac.dmac_desc_addr11,
+            12 => &dmac.dmac_desc_addr12,
+            13 => &dmac.dmac_desc_addr13,
+            14 => &dmac.dmac_desc_addr14,
+            15 => &dmac.dmac_desc_addr15,
             _ => panic!(),
         }
     }
 
-    pub unsafe fn en_reg(&self) -> &Reg<DMAC_EN_REG_SPEC> {
+    pub unsafe fn en(&self) -> &Reg<DMAC_EN_SPEC> {
         let dmac = &*DMAC::PTR;
         match self.idx {
-            0 => &dmac.dmac_en_reg0,
-            1 => &dmac.dmac_en_reg1,
-            2 => &dmac.dmac_en_reg2,
-            3 => &dmac.dmac_en_reg3,
-            4 => &dmac.dmac_en_reg4,
-            5 => &dmac.dmac_en_reg5,
-            6 => &dmac.dmac_en_reg6,
-            7 => &dmac.dmac_en_reg7,
-            8 => &dmac.dmac_en_reg8,
-            9 => &dmac.dmac_en_reg9,
-            10 => &dmac.dmac_en_reg10,
-            11 => &dmac.dmac_en_reg11,
-            12 => &dmac.dmac_en_reg12,
-            13 => &dmac.dmac_en_reg13,
-            14 => &dmac.dmac_en_reg14,
-            15 => &dmac.dmac_en_reg15,
+            0 => &dmac.dmac_en0,
+            1 => &dmac.dmac_en1,
+            2 => &dmac.dmac_en2,
+            3 => &dmac.dmac_en3,
+            4 => &dmac.dmac_en4,
+            5 => &dmac.dmac_en5,
+            6 => &dmac.dmac_en6,
+            7 => &dmac.dmac_en7,
+            8 => &dmac.dmac_en8,
+            9 => &dmac.dmac_en9,
+            10 => &dmac.dmac_en10,
+            11 => &dmac.dmac_en11,
+            12 => &dmac.dmac_en12,
+            13 => &dmac.dmac_en13,
+            14 => &dmac.dmac_en14,
+            15 => &dmac.dmac_en15,
             _ => panic!(),
         }
     }
 
-    pub unsafe fn mode_reg(&self) -> &Reg<DMAC_MODE_REG_SPEC> {
+    pub unsafe fn mode(&self) -> &Reg<DMAC_MODE_SPEC> {
         let dmac = &*DMAC::PTR;
         match self.idx {
-            0 => &dmac.dmac_mode_reg0,
-            1 => &dmac.dmac_mode_reg1,
-            2 => &dmac.dmac_mode_reg2,
-            3 => &dmac.dmac_mode_reg3,
-            4 => &dmac.dmac_mode_reg4,
-            5 => &dmac.dmac_mode_reg5,
-            6 => &dmac.dmac_mode_reg6,
-            7 => &dmac.dmac_mode_reg7,
-            8 => &dmac.dmac_mode_reg8,
-            9 => &dmac.dmac_mode_reg9,
-            10 => &dmac.dmac_mode_reg10,
-            11 => &dmac.dmac_mode_reg11,
-            12 => &dmac.dmac_mode_reg12,
-            13 => &dmac.dmac_mode_reg13,
-            14 => &dmac.dmac_mode_reg14,
-            15 => &dmac.dmac_mode_reg15,
+            0 => &dmac.dmac_mode0,
+            1 => &dmac.dmac_mode1,
+            2 => &dmac.dmac_mode2,
+            3 => &dmac.dmac_mode3,
+            4 => &dmac.dmac_mode4,
+            5 => &dmac.dmac_mode5,
+            6 => &dmac.dmac_mode6,
+            7 => &dmac.dmac_mode7,
+            8 => &dmac.dmac_mode8,
+            9 => &dmac.dmac_mode9,
+            10 => &dmac.dmac_mode10,
+            11 => &dmac.dmac_mode11,
+            12 => &dmac.dmac_mode12,
+            13 => &dmac.dmac_mode13,
+            14 => &dmac.dmac_mode14,
+            15 => &dmac.dmac_mode15,
             _ => panic!(),
         }
     }
 
     pub unsafe fn set_channel_modes(&mut self, src: ChannelMode, dst: ChannelMode) {
-        self.mode_reg().write(|w| {
+        self.mode().write(|w| {
             match src {
                 ChannelMode::Wait => w.dma_src_mode().waiting(),
                 ChannelMode::Handshake => w.dma_src_mode().handshake(),
@@ -169,19 +169,19 @@ impl Channel {
         fence(Ordering::SeqCst); //////
 
         let desc_addr = desc.as_ptr() as usize;
-        self.desc_addr_reg().write(|w| {
+        self.desc_addr().write(|w| {
             w.dma_desc_addr().variant((desc_addr >> 2) as u32);
             w.dma_desc_high_addr()
                 .variant(((desc_addr >> 32) as u8) & 0b11);
             w
         });
-        self.en_reg().write(|w| w.dma_en().enabled());
+        self.en().write(|w| w.dma_en().enabled());
 
         fence(Ordering::SeqCst); //////
     }
 
     pub unsafe fn stop_dma(&mut self) {
-        self.en_reg().write(|w| w.dma_en().disabled());
+        self.en().write(|w| w.dma_en().disabled());
 
         fence(Ordering::SeqCst); //////
     }
