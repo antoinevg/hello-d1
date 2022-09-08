@@ -4,16 +4,13 @@ use core::{
 };
 
 use d1_pac::{
-    CCU,
-    DMAC,
     dmac::{
-        dmac_desc_addr::DMAC_DESC_ADDR_SPEC,
-        dmac_en::DMAC_EN_SPEC,
+        dmac_desc_addr::DMAC_DESC_ADDR_SPEC, dmac_en::DMAC_EN_SPEC,
+        dmac_irq_en0::DMAC_IRQ_EN0_SPEC, dmac_irq_en1::DMAC_IRQ_EN1_SPEC,
         dmac_mode::DMAC_MODE_SPEC,
-        dmac_irq_en0::DMAC_IRQ_EN0_SPEC,
-        dmac_irq_en1::DMAC_IRQ_EN1_SPEC,
     },
-    generic::Reg
+    generic::Reg,
+    CCU, DMAC,
 };
 
 use self::descriptor::Descriptor;

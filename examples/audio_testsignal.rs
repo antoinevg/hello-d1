@@ -10,8 +10,8 @@ use twiddle;
 
 use hello_d1::audio_codec::{self, BLOCK_LENGTH};
 use hello_d1::dmac;
-use hello_d1::plic;
 use hello_d1::logging;
+use hello_d1::plic;
 use hello_d1::println;
 
 #[riscv_rt::entry]
@@ -102,22 +102,33 @@ extern "C" fn MachineExternal() {
             //let mbus = twiddle::bit(bits, 31);
             //let chans = twiddle::range(bits, 0..15);
 
-            // get pending bits
+            // get pending interrupts
             let bits = dmac.dmac_irq_pend0.read().bits();
             let pending = twiddle::range(bits, 8..10);
 
-            // clear pending interrupts
-            if twiddle::bit(pending, 0) { // half package
-                dmac.dmac_irq_pend0.write(|w| w.dma2_hlaf_irq_pend().set_bit());
+            // clear all pending interrupts
+            if twiddle::bit(pending, 0) {
+                // half package
+                dmac.dmac_irq_pend0
+                    .write(|w| w.dma2_hlaf_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma2_hlaf_irq_pend().bit_is_set() {}
             }
-            if twiddle::bit(pending, 1) { // end of package
-                dmac.dmac_irq_pend0.write(|w| w.dma2_pkg_irq_pend().set_bit());
+            if twiddle::bit(pending, 1) {
+                // end of package
+                dmac.dmac_irq_pend0
+                    .write(|w| w.dma2_pkg_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma2_pkg_irq_pend().bit_is_set() {}
             }
-            if twiddle::bit(pending, 2) { // end of queue
-                dmac.dmac_irq_pend0.write(|w| w.dma2_queue_irq_pend().set_bit());
-                while dmac.dmac_irq_pend0.read().dma2_queue_irq_pend().bit_is_set() {}
+            if twiddle::bit(pending, 2) {
+                // end of queue
+                dmac.dmac_irq_pend0
+                    .write(|w| w.dma2_queue_irq_pend().set_bit());
+                while dmac
+                    .dmac_irq_pend0
+                    .read()
+                    .dma2_queue_irq_pend()
+                    .bit_is_set()
+                {}
             }
 
             // dump some debug info
@@ -132,30 +143,32 @@ extern "C" fn MachineExternal() {
         pac::Interrupt::AUDIO_CODEC => {
             let audio_codec = unsafe { &*pac::AUDIO_CODEC::PTR };
 
+            // get pending interrupts
+            let pending = audio_codec.ac_dac_fifos.read();
+
             // clear all pending interrupts
-            let bits = audio_codec.ac_dac_fifos.read().bits();
-            if twiddle::bit(bits, 3) {
-                let bits = twiddle::set(bits, 3, true);
+            if pending.txe_int().is_pending() {
+                audio_codec.ac_dac_fifos.write(|w| w.txe_int().set_bit());
+                // while audio_codec.ac_dac_fifos.read().txe_int().bit_is_set() {}
             }
-            if twiddle::bit(bits, 2) {
-                let bits = twiddle::set(bits, 2, true);
+            if pending.txo_int().is_pending() {
+                audio_codec.ac_dac_fifos.write(|w| w.txo_int().set_bit());
+                // while audio_codec.ac_dac_fifos.read().txo_int().bit_is_set() {}
             }
-            if twiddle::bit(bits, 1) {
-                let bits = twiddle::set(bits, 1, true);
+            if pending.txu_int().is_pending() {
+                audio_codec.ac_dac_fifos.write(|w| w.txu_int().set_bit());
+                // while audio_codec.ac_dac_fifos.read().txu_int().bit_is_set() {}
             }
-            audio_codec.ac_dac_fifos.write(|w| unsafe { w.bits(bits) });
+
+            // TODO drop this and use loops above
             loop {
                 let bits = audio_codec.ac_dac_fifos.read().bits();
                 if twiddle::range(bits, 1..3) == 0 {
                     break;
                 } else {
-                    println!("FUCK: {:#034b}", bits);
+                    println!("WHELP: {:#034b}", bits);
                 }
             }
-
-            //let bits = audio_codec.ac_dac_fifos.read().bits();
-            //let bits = twiddle::range(bits, 1..3);
-            //println!("ac_dac_fifos: {:#05b}", bits);
 
             // dump some debug info
             let counter = unsafe { COUNTER };
@@ -164,8 +177,6 @@ extern "C" fn MachineExternal() {
                 //println!("ac_dac_cnt: {:#034b} -> {}", count, counter);
                 println!("ac_dac_cnt: {}", count);
             }
-
-
         }
         x => {
             println!("Unexpected claim: {:?}", x);
