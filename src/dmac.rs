@@ -54,6 +54,36 @@ impl Dmac {
         }
     }
 
+    /// Obtain a static `Plic` instance for use in e.g. interrupt handlers
+    ///
+    /// # Safety
+    ///
+    /// 'Tis thine responsibility, that which thou doth summon.
+    pub unsafe fn summon() -> Self {
+        let dmac =d1_pac::Peripherals::steal().DMAC;
+        Self {
+            dmac,
+            channels: [
+                Channel { idx: 0 },
+                Channel { idx: 1 },
+                Channel { idx: 2 },
+                Channel { idx: 3 },
+                Channel { idx: 4 },
+                Channel { idx: 5 },
+                Channel { idx: 6 },
+                Channel { idx: 7 },
+                Channel { idx: 8 },
+                Channel { idx: 9 },
+                Channel { idx: 10 },
+                Channel { idx: 11 },
+                Channel { idx: 12 },
+                Channel { idx: 13 },
+                Channel { idx: 14 },
+                Channel { idx: 15 },
+            ],
+        }
+    }
+
     // TODO
     pub unsafe fn irq_en0(&self) -> &Reg<DMAC_IRQ_EN0_SPEC> {
         let dmac = &*DMAC::PTR;

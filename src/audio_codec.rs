@@ -1,15 +1,9 @@
+#![cfg_attr(rustfmt, rustfmt_skip)]
+
 /// 8.4 Audio Codec, page 758
-///
-/// One 128x20-bit FIFO for DAC data transmit
-/// One 128x20-bit FIFO for ADC data receive
-/// Programmable FIFO thresholds
-/// HPF Function
 ///
 /// The clock source for the digital part is the PLL_AUDIO0 and
 /// PLL_AUDIO1.
-///
-/// For the ADC clock, configure AUDIO_CODEC_ADC_CLK_REG[25:24] to
-/// select the clock source.
 ///
 /// For the DAC clock, configure AUDIO_CODEC_DAC_CLK_REG[25:24] to
 /// select the clock source.
@@ -17,37 +11,12 @@
 /// The PK-PK jitter of PLL_AUDIO0 and PLL_AUDIO1 should be less than
 /// 200 ps.
 ///
-/// The digital ADC part can be enabled or disabled by the bit[28] of the AC_ADC_FIFOC register.
-///
 /// The stereo DAC sample rate can be configured by setting the
 /// register. To save power, the analog DACL can be enabled or
 /// disabled by setting the bit[15] of the DAC_REG register, and the
 /// analog DACR can be enabled or disabled by setting the bit[14] of
 /// the DAC_REG register. The digital DAC part can be enabled or
 /// disabled by the bit[31] of the AC_DAC_DPC register.
-///
-/// The Audio Codec has two interrupts:
-/// ADC_IRQ_EN
-/// ADC_IRQ_STATUS
-/// ADC_OVERRUN_IRQ_EN
-/// ADC_OVERRUN_IRQ_STATUS
-/// DAC_IRQ_EN
-/// DAC_IRQ_STATUS
-/// DAC_OVERRUN_IRQ_EN
-/// DAC_OVERRUN_IRQ_STATUS
-/// DAC_UNDERRUN_IRQ_EN
-/// DAC_UNDERRUN_IRQ_STATUS
-///
-/// 8.4.4.1 Record Process, page 769
-/// 1. Codec initialization: configure AUDIO_CODEC_BGR_REG to open the
-///    audio codec bus clock gating and de-assert bus reset; configure
-///    AUDIO_CODEC_ADC_CLK_REG and PLL_AUDIO0_CTRL_REG to configure
-///    PLL_Audio0 frequency and enable PLL_Audio0. For details, refer
-///    to section 3.2 “CCU”.
-/// 2. Configure the sample rate and data transfer format, then open
-///    the ADC.
-/// 3. Configure the DMA and DMA request.
-/// 4. Enable the ADC DRQ and DMA.
 ///
 /// 8.4.4.2 Playback Process, page 769-770
 /// 1. Codec initialization: configure AUDIO_CODEC_BGR_REG to open the
@@ -72,28 +41,47 @@ use crate::println;
 /// Built-in audio codec
 pub struct AudioCodec {
     audio_codec: AUDIO_CODEC,
+    dma_descriptor_1: Option<descriptor::Descriptor>,
+    dma_descriptor_2: Option<descriptor::Descriptor>,
 }
 
 impl AudioCodec {
     /// Create a new `AudioCodec`
-    ///
-    /// TODO replace magic numbers with register methods
     pub fn new(audio_codec: AUDIO_CODEC, ccu: &mut CCU) -> AudioCodec {
-        init_codec_ccu(ccu); // 1
-        configure_dac(&audio_codec); // 2
+        // 1. codec initialization
+        init_codec_ccu(ccu);
 
-        // enable_debug_mode(&audio_codec);
+        // 2. configure sample rate, data transfer, open dac
+        configure_dac(&audio_codec);
 
-        Self { audio_codec }
+        //enable_debug_mode(&audio_codec);
+
+        Self {
+            audio_codec,
+            dma_descriptor_1: None,
+            dma_descriptor_2: None,
+        }
     }
 
-    pub fn start(&self, dmac: &mut Dmac) {
-        configure_mixer(&self.audio_codec);
-        enable_dac_drq_dma(&self.audio_codec, dmac); // 4
+    pub fn start(&mut self, dmac: &mut Dmac) {
+        // 3. configure dma and dma request
+        let (descriptor_1, descriptor_2) = configure_dma(&self.audio_codec, dmac);
+
+        // 4. enable dac drq and dma
+        enable_dac_drq_dma(&self.audio_codec, dmac, &descriptor_1);
+
+        // save descriptors
+        self.dma_descriptor_1 = Some(descriptor_1);
+        self.dma_descriptor_2 = Some(descriptor_2);
+
+        // configure analog path
+        configure_analog_path(&self.audio_codec);
     }
 
     /// Obtain a static `AudioCodec` instance for use in
     /// e.g. interrupt handlers
+    ///
+    /// TODO populate dma descriptors
     ///
     /// # Safety
     ///
@@ -101,6 +89,8 @@ impl AudioCodec {
     pub unsafe fn summon() -> Self {
         Self {
             audio_codec: d1_pac::Peripherals::steal().AUDIO_CODEC,
+            dma_descriptor_1: None,
+            dma_descriptor_2: None,
         }
     }
 }
@@ -140,8 +130,10 @@ fn init_codec_ccu(ccu: &CCU) {
     // 16     AUDIO_CODEC Reset            = 1 (0: Assert, 1: De-assert)
     // 15:01  ---
     // 00     Gating Clock for AUDIO_CODEC = 0 (0: Mask, 1: Pass)
-    ccu.audio_codec_bgr.write(|w| w.gating().pass());
-    ccu.audio_codec_bgr.write(|w| w.rst().deassert());
+    ccu.audio_codec_bgr.write(|w| {
+        w.gating().pass()
+         .rst().deassert()
+    });
 
     // 2. configure PLL_Audio0 frequency and select PLL_Audio0
     //
@@ -189,11 +181,11 @@ fn init_codec_ccu(ccu: &CCU) {
     // 01     PLL_INPUT_DIV_2          = 0         = M1 = PLL_INPUT_DIV2  + 1 = 1
     // 00     PLL_OUTPUT_DIV_2         = 1         = M0 = PLL_OUTPUT_DIV2 + 1 = 2
     ccu.pll_audio0_ctrl.write(|w| unsafe {
-        w.pll_ldo_en().disable()
+        w.pll_en().disable()
+         .pll_ldo_en().disable()
          .lock_enable().enable()
          .pll_output_gate().enable()
-         .lock_enable().clear_bit()
-         .pll_sdm_en().disable() // ??? enable spread spectrum?
+         .pll_sdm_en().enable()
          .pll_p().bits(11)
          .pll_n().bits(23)
          .pll_unlock_mdsel().cc_21_29()
@@ -201,49 +193,61 @@ fn init_codec_ccu(ccu: &CCU) {
          .pll_input_div2().clear_bit()
          .pll_output_div2().set_bit()
     });
-    ccu.pll_audio0_ctrl
-        .write(|w| unsafe { w.pll_en().enable() });
 
-    while ccu.pll_audio0_ctrl.read().lock_enable().is_disable() {
+    // pg. 74 3.2.6.19 PLL_AUDIO0_PAT0_CTRL_REG
+    // 0x0178 PLL_AUDIO0 Pattern0 Control Register (Default Value: 0x0000_0000)
+    // Example: 1100_0000_0000_0001_0010_0110_1110_1001
+    //
+    // 31     Sigma-Delta Pattern Enable = 1
+    // 30:29  Spread Frequency Mode      = 10 = Triangular (1-bit)
+    // 28:20  Wave Step                  = 0_0000_0000
+    // 19     SDM Clock Select           = 0  = 24 MHz
+    // 18:17  Frequency                  = 00 = 31.5 kHz
+    // 16:00  Wave Bottom                = 1_0010_0110_1110_1001 = 0x1_26e9 = 75497
+    //ccu.pll_audio0_pat0_ctrl.write(|w| unsafe { w.bits(0xc001_26e9) });
+    ccu.pll_audio0_pat0_ctrl.write(|w| unsafe {
+        w.sig_delt_pat_en().set_bit()
+         .spr_freq_mode().triangular_1()
+         .wave_step().bits(0x0)
+         .sdm_clk_sel().f_24_m()
+         .freq().f_31_5_k()
+         .wave_bot().bits(0x1_26e9)
+    });
+
+    // pg. 75 3.2.6.20 PLL_AUDIO0_PAT1_CTRL_REG
+    // 0x017C PLL_AUDIO0 Pattern1 Control Register (Default Value: 0x0000_0000)
+    //
+    // 31:25  ---
+    // 24     Dither Enable
+    // 23:21  ---
+    // 20     Fraction Enable
+    // 19:17  ---
+    // 16:00  Fraction In
+    //ccu.pll_audio0_pat1_ctrl.write(|w| unsafe { w.bits(0x0000_0000) });
+    ccu.pll_audio0_pat1_ctrl.write(|w| unsafe {
+        w.dither_en().clear_bit()
+         .frac_en().clear_bit()
+         .frac_in().bits(0x0)
+    });
+
+    // pg. 78 3.2.6.29 0x0378 PLL_AUDIO0_BIAS_REG
+    // PLL_AUDIO0 Bias Register (Default Value: 0x0003_0000)
+    //
+    // 31:21  ---
+    // 20:16  PLL bias control = 3
+    // 15:00  ---
+    //ccu.pll_audio0_bias.write(|w| unsafe { w.bits(0x0003_0000) });
+    ccu.pll_audio0_bias.write(|w| unsafe {
+        w.pll_cp().bits(0x0)
+    });
+
+    // enable pll_audio0
+    ccu.pll_audio0_ctrl.modify(|_, w| w.pll_en().enable());
+
+    // wait for pll_audio0 lock
+    while ccu.pll_audio0_ctrl.read().lock().is_unlocked() {
         println!("waiting for pll_audio0 lock");
     }
-
-    /*
-        // pg. 74 3.2.6.19 PLL_AUDIO0_PAT0_CTRL_REG
-        // 0x0178 PLL_AUDIO0 Pattern0 Control Register (Default Value: 0x0000_0000)
-        // Example: 1100_0000_0000_0001_0010_0110_1110_1001
-        //
-        // 31     Sigma-Delta Pattern Enable = 1
-        // 30:29  Spread Frequency Mode      = 10 = Triangular (1-bit)
-        // 28:20  Wave Step                  = 0_0000_0000
-        // 19     SDM Clock Select           = 0  = 24 MHz
-        // 18:17  Frequency                  = 00 = 31.5 kHz
-        // 16:00  Wave Bottom                = 1_0010_0110_1110_1001 = 0x1_26e9 = 75497
-        ccu.pll_audio0_pat0_ctrl
-            .write(|w| unsafe { w.bits(0xc001_26e9) });
-
-        // pg. 75 3.2.6.20 PLL_AUDIO0_PAT1_CTRL_REG
-        // 0x017C PLL_AUDIO0 Pattern1 Control Register (Default Value: 0x0000_0000)
-        //
-        // 31:25  ---
-        // 24     Dither Enable
-        // 23:21  ---
-        // 20     Fraction Enable
-        // 19:17  ---
-        // 16:00  Fraction In
-        ccu.pll_audio0_pat1_ctrl
-            .write(|w| unsafe { w.bits(0x0000_0000) });
-
-        // pg. 78 3.2.6.29 0x0378 PLL_AUDIO0_BIAS_REG
-        // PLL_AUDIO0 Bias Register (Default Value: 0x0003_0000)
-        //
-        // 31:21  ---
-        // 20:16  PLL bias control = 3
-        // 15:00  ---
-        ccu.pll_audio0_bias
-            .write(|w| unsafe { w.bits(0x0003_0000) });
-
-    */
 }
 
 /// 8.4.4.2 Playback Process, page 769-770
@@ -279,18 +283,18 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 02     FIFO_UNDERRUN_IRQ_EN   = 1
     // 01     FIFO_OVERRUN_IRQ_EN    = 1
     // 00     FIFO_FLUSH             = 0   (0: self clear, 1: flush TX FIFO)
-    audio_codec.ac_dac_fifoc.write(|w| unsafe {
+    audio_codec.ac_dac_fifoc.modify(|_, w| unsafe {
         w.dac_fs().fs48k()
-         .send_last().zero()
+         //.send_last().zero()
          .fifo_mode().little_endian()
-         .dac_drq_clr_cnt().wlevel() // ?
-         .tx_trig_level().bits(32) // ?
-         .dac_mono_en().stereo()
-         .tx_sample_bits().bits_16()
+         //.dac_drq_clr_cnt().wlevel() // ?
+         //.tx_trig_level().bits(32) // ?
+         //.dac_mono_en().stereo()
+         .tx_sample_bits().bits_20()
     });
 
     // FIFO flush
-    //audio_codec.ac_dac_fifoc.write(|w| w.fifo_flush().flush());
+    //audio_codec.ac_dac_fifoc.modify(|_, w| w.fifo_flush().flush());
 
     // FIFO clear pending interrupts
     //
@@ -311,20 +315,6 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
          .txo_int().clear_or_pending()
     });*/
 
-    // enable FIFO_UNDERRUN & FIFO_OVERRUN IRQ's
-    /*audio_codec.ac_dac_fifoc.write(|w| {
-        w.fifo_underrun_irq_en().enable()
-         .fifo_overrun_irq_en().enable()
-    });*/
-
-    // FIFO clear sample counter
-    //
-    // pg. 780 8.4.6. AC_DAC_CNT
-    // 0x0024 DAC TX Counter Register (Default Value: 0x0000_0000)
-    //
-    // 31:00  TX_CNT TX Sample Counter
-    audio_codec.ac_dac_cnt.write(|w| unsafe { w.bits(0) });
-
     // Enable DAC digital part
     //
     // pg. 774 8.4.6.1 DAC Digital Part Control Register (Default Value: 0x0000_0000)
@@ -335,8 +325,9 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 17:12  DVOL ATT = DVC * -1.16dB
     // ...
     // 00     HUB_EN  Audio Hub Enable  ?????
-    audio_codec.ac_dac_dpc.write(|w| unsafe {
-        w.en_da().enable().dvol().bits(0) // ATT = 0 * -1.16dB = 0dB
+    audio_codec.ac_dac_dpc.modify(|_, w| unsafe {
+        w.en_da().enable()
+         //.dvol().bits(0) // ATT = 0 * -1.16dB = 0dB
     });
 
     // Set DAC Volume
@@ -348,21 +339,25 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 16     DAC_VOL_SEL - DAC Volume Control Selection Enable
     // 15:08  DAC_VOL_L  (0x00: Mute, 0x01: -119.25dB 0xa0: 0dB, 0xff: 71.25dB, 0.75dB / Step)
     // 07:00  DAC_VOL_R
-    audio_codec.dac_vol_ctrl.write(|w| unsafe {
+    audio_codec.dac_vol_ctrl.modify(|_, w| unsafe {
         w.dac_vol_sel().enable()
          .dac_vol_l().bits(0xa0)
          .dac_vol_r().bits(0xa0)
     });
 }
 
-fn configure_mixer(audio_codec: &AUDIO_CODEC) {
+fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     // Enable left and right line out
     //
     // pg. 832 8.4.6.115 DAC Analog Control Register (Default Value: 0x0015_0000)
     // 0x0310 DAC_REG
     //
     // 31:24  ---
-    // ...
+    // 23     CURRENT_TEST_SELECT
+    // 22     ---
+    // 21:20  IOPVRS
+    // 19:18  ILINEOUTAMPS
+    // 17:16  IOPDACS
     // 15     DACL_EN ???
     // 14     DACR_EN ???
     // 13     LINEOUTLEN
@@ -373,14 +368,38 @@ fn configure_mixer(audio_codec: &AUDIO_CODEC) {
     // 06     LINEOUTL_DIFFEN
     // 05     LINEOUTR_DIFFEN
     // 04:00  LINEOUT_VOL_CTRL (0x1f to 0x02, step=-1.5dB, mute = 0 or 1)
-    audio_codec.dac.write(|w| unsafe {
+    audio_codec.dac.modify(|_, w| unsafe {
         w.dacl_en().enable()
          .dacr_en().enable()
-         .lineoutlen().enable()
+         //.lineoutlen().enable()
          .lmute().unmute()
-         .lineoutren().enable()
+         //.lineoutren().enable()
          .rmute().unmute()
-         .lineout_vol_ctrl().bits(0x1f)
+         //.lineout_vol_ctrl().bits(0x1f)
+    });
+
+
+    // Enable headphone output
+    // pg. 764 This register is undocumented!
+    // 0x0324 HP_REG
+    //
+    // From: sun50iw10-codec.h
+    //
+    // #define HPRCALIVERIFY   24
+    // #define HPLCALIVERIFY   16
+    // #define HPPA_EN         15
+    // #define HPINPUTEN       11
+    // #define HPOUTPUTEN      10
+    // #define HPPA_DEL        8
+    // #define CP_CLKS         6
+    // #define HPCALIMODE      5
+    // #define HPCALIVERIFY    4
+    // #define HPCALIFIRST     3
+    // #define HPCALICKS       0
+    audio_codec.hp.modify(|_, w| {
+        w.hppa_en().enable()
+         .hpoutputen().enable()
+        // .hpinputen().enable()
     });
 
     // Enable headphone output
@@ -403,33 +422,30 @@ fn configure_mixer(audio_codec: &AUDIO_CODEC) {
     // 14:13  RAMP_FINAL_STATE_RES
     // 09:08  HPFB_BUF_OUTPUT_CURRENT
     // 07:00  ---
-    audio_codec.hp2.write(|w| {
+    /*audio_codec.hp2.modify(|_, w| {
         w.hpfb_buf_en().enable() // ?
          .headphone_gain().db0()
          .opdrv_cur().max()
          .hp_drven().enable()
          .hp_drvouten().enable()
-    });
+         .ramp_out_en().enable()
+    });*/
 
     // Turn on speaker ???
-    //unsafe {
-    //    riscv::asm::delay(1000);
-    //} // increase in case of pop
     // looks like this is actually NC on the RV Dock
-    // let gpio = unsafe { pac::Peripherals::steal().GPIO };
-    // const PB12: u32 = 12;
-    // gpio.pb_cfg1.write(|w| w.pb12_select().input());
-    // let bits = gpio.pb_dat.read().bits();
-    // println!("GPIOB: {:#018b}", bits);    // 0b0001_1100_0000_0000
-    // gpio.pb_cfg1.write(|w| w.pb12_select().output());
-    // gpio.pb_dat
-    //     .modify(|r, w| unsafe { w.bits(r.bits() | (0 << PB12)) });
+    /*let gpio = unsafe { pac::Peripherals::steal().GPIO };
+    const PB12: u32 = 12;
+    gpio.pb_cfg1.modify(|_, w| w.pb12_select().output());
+    gpio.pb_dat
+        .modify(|r, w| unsafe { w.bits(r.bits() | (1 << PB12)) });*/
 }
 
-pub const BLOCK_LENGTH: usize = 64;
+// Audio Buffers
+//
+// TODO pg. 225  make sure that TX_BUFFER_1 is word-aligned
+pub const BLOCK_LENGTH: usize = 256;
 pub const STEREO_BLOCK_LENGTH: usize = BLOCK_LENGTH * 2; // 2 channels
-                                                         //pub const TX_BUFFER_LENGTH:usize = STEREO_BLOCK_LENGTH * 2; // 2 half-blocks
-pub const TX_BUFFER_LENGTH: usize = STEREO_BLOCK_LENGTH * 1; // 2 buffers
+pub const TX_BUFFER_LENGTH: usize = STEREO_BLOCK_LENGTH;
 pub static mut TX_BUFFER_1: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
 pub static mut TX_BUFFER_2: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
 
@@ -438,15 +454,10 @@ pub static mut TX_BUFFER_2: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
 /// ...
 /// 3. Configure the DMA and DMA request.
 /// ...
-fn configure_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac) {
-    // TODO move dma config here
-}
-
-/// 8.4.4.2 Playback Process, page 769-770
-///
-/// ...
-/// 4. Enable the DAC DRQ and DMA.
-fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac) {
+fn configure_dma(
+    audio_codec: &AUDIO_CODEC,
+    dmac: &mut Dmac
+) -> (descriptor::Descriptor, descriptor::Descriptor) {
     // generate some test noise
     unsafe {
         let mut counter = 0;
@@ -463,16 +474,16 @@ fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac) {
         }
     }
 
-    // TODO pg. 225  make sure that TX_BUFFER_1 is word-aligned
-
-    // enable dma
+    // configure dma descriptors
     let ac_dac_txdata = &unsafe { &*AUDIO_CODEC::PTR }.ac_dac_txdata as *const _ as *mut ();
-    let descriptor_config = descriptor::DescriptorConfig {
+    let source = unsafe { TX_BUFFER_1.as_ptr().cast() };
+    //let byte_counter = TX_BUFFER_LENGTH * 4;
+    let byte_counter = unsafe { TX_BUFFER_1.len() };
+    let descriptor_1_config = descriptor::DescriptorConfig {
         // memory
-        source: unsafe { TX_BUFFER_1.as_ptr().cast() },
+        source: source,
         destination: ac_dac_txdata,
-        //byte_counter: unsafe { TX_BUFFER_1.len() },     // ???
-        byte_counter: (unsafe { TX_BUFFER_LENGTH } * 4), // ???
+        byte_counter: byte_counter,
         // config
         link: None,
         wait_clock_cycles: 0,
@@ -488,65 +499,68 @@ fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac) {
         src_block_size: descriptor::BlockSize::Byte4,
         src_drq_type: descriptor::SrcDrqType::Dram,
     };
-    let mut descriptor_config_2 = descriptor_config.clone();
+    let mut descriptor_2_config = descriptor_1_config.clone();
 
-    let mut descriptor_1: Descriptor = descriptor_config.try_into().unwrap();
+    // create descriptor_1
+    let mut descriptor_1: Descriptor = descriptor_1_config.try_into().unwrap();
+    let descriptor_1_ptr = &descriptor_1 as *const Descriptor as *const ();
 
     // link descriptor_1 to descriptor_2
-    let descriptor_1_ptr = &descriptor_1 as *const Descriptor as *const ();
-    descriptor_config_2.source = unsafe { TX_BUFFER_2.as_ptr().cast() };
-    descriptor_config_2.link = Some(descriptor_1_ptr);
-    let descriptor_2: Descriptor = descriptor_config_2.try_into().unwrap();
+    descriptor_2_config.source = unsafe { TX_BUFFER_2.as_ptr().cast() };
+    descriptor_2_config.link = Some(descriptor_1_ptr);
+
+    // create descriptor_2
+    let descriptor_2: Descriptor = descriptor_2_config.try_into().unwrap();
+    let descriptor_2_ptr = &descriptor_2 as *const Descriptor as *const ();
 
     // link descriptor_2 to descriptor_1
-    let descriptor_2_ptr = &descriptor_2 as *const Descriptor as *const ();
     descriptor_1.link = descriptor_2_ptr as u32;
     descriptor_1.link |= ((descriptor_2_ptr as usize >> 32) as u32) & 0b11;
 
+    (descriptor_1, descriptor_2)
+}
+
+/// 8.4.4.2 Playback Process, page 769-770
+///
+/// ...
+/// 4. Enable the DAC DRQ and DMA.
+fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac, descriptor: &descriptor::Descriptor) {
     unsafe {
-        let channel = 2;
+        let channel = 0;
 
         // enable interrupts
         dmac.irq_en0().write(|w| {
-            w //.dma2_hlaf_irq_en().set_bit()
-                .dma2_pkg_irq_en()
-                .set_bit()
-                .dma2_queue_irq_en()
-                .set_bit()
+            w //.dma0_hlaf_irq_en().set_bit()
+                .dma0_pkg_irq_en().set_bit()
+                .dma0_queue_irq_en().set_bit()
         });
 
         dmac.channels[channel]
             .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Handshake);
-        //dmac.channels[channel].set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Handshake);
-        //dmac.channels[channel].set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
-        //dmac.channels[channel].set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Wait);
-        dmac.channels[channel].start_descriptor(NonNull::from(&descriptor_1));
+        //    .set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Handshake);
+        //    .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
+        //    .set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Wait);
+        dmac.channels[channel].start_descriptor(NonNull::from(descriptor));
     }
 
-    // clear pending interrupts
-    /*audio_codec.ac_dac_fifos.write(|w| {
-        w.txe_int().clear_or_pending()
-         .txu_int().clear_or_pending()
-         .txo_int().clear_or_pending()
-    });*/
+    // FIFO clear sample counter
+    //
+    // pg. 780 8.4.6. AC_DAC_CNT
+    // 0x0024 DAC TX Counter Register (Default Value: 0x0000_0000)
+    //
+    // 31:00  TX_CNT TX Sample Counter
+    //audio_codec.ac_dac_cnt.write(|w| unsafe { w.bits(0) });
 
     // enable dac interrupts - all of them here ?
-    audio_codec.ac_dac_fifoc.write(|w| {
+    audio_codec.ac_dac_fifoc.modify(|_, w| {
         w.dac_drq_en().enable()
          .dac_irq_en().enable()
-        //.fifo_underrun_irq_en().enable()
-        //.fifo_overrun_irq_en().enable()
+         .fifo_underrun_irq_en().enable()
+         .fifo_overrun_irq_en().enable()
     });
 
-    // clear pending interrupts
-    /*audio_codec.ac_dac_fifos.write(|w| {
-        w.txe_int().clear_or_pending()
-         .txu_int().clear_or_pending()
-         .txo_int().clear_or_pending()
-    });*/
-
     // FIFO flush
-    //audio_codec.ac_dac_fifoc.write(|w| w.fifo_flush().flush());
+    //audio_codec.ac_dac_fifoc.modify(|_, w| w.fifo_flush().flush());
 }
 
 // - Trim bandgap reference voltage. ------------------------------------------
