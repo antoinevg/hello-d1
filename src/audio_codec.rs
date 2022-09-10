@@ -327,6 +327,8 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 00     HUB_EN  Audio Hub Enable  ?????
     audio_codec.ac_dac_dpc.modify(|_, w| unsafe {
         w.en_da().enable()
+         //.hpf_en().disable()
+         //.hub_en().disable()
          //.dvol().bits(0) // ATT = 0 * -1.16dB = 0dB
     });
 
@@ -379,27 +381,14 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     });
 
 
-    // Enable headphone output
-    // pg. 764 This register is undocumented!
-    // 0x0324 HP_REG
-    //
-    // From: sun50iw10-codec.h
-    //
-    // #define HPRCALIVERIFY   24
-    // #define HPLCALIVERIFY   16
-    // #define HPPA_EN         15
-    // #define HPINPUTEN       11
-    // #define HPOUTPUTEN      10
-    // #define HPPA_DEL        8
-    // #define CP_CLKS         6
-    // #define HPCALIMODE      5
-    // #define HPCALIVERIFY    4
-    // #define HPCALIFIRST     3
-    // #define HPCALICKS       0
-    audio_codec.hp.modify(|_, w| {
-        w.hppa_en().enable()
-         .hpoutputen().enable()
-        // .hpinputen().enable()
+    // sun20iw1-codec.c:671 sunxi_codec_headphone_event
+    audio_codec.power.modify(|_, w| {
+        w.hpldo_en().enable() // <============= THAT ONE!
+    });
+
+    // sun20iw1-codec.c:671 sunxi_codec_headphone_event
+    audio_codec.ramp.modify(|_, w| {
+        w.rmc_en().enable()
     });
 
     // Enable headphone output
@@ -422,22 +411,46 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     // 14:13  RAMP_FINAL_STATE_RES
     // 09:08  HPFB_BUF_OUTPUT_CURRENT
     // 07:00  ---
-    /*audio_codec.hp2.modify(|_, w| {
-        w.hpfb_buf_en().enable() // ?
-         .headphone_gain().db0()
-         .opdrv_cur().max()
+    audio_codec.hp2.modify(|_, w| {
+        w//.hpfb_buf_en().enable() // ?
+         //.headphone_gain().db0()
+         //.opdrv_cur().max()
          .hp_drven().enable()
          .hp_drvouten().enable()
-         .ramp_out_en().enable()
+         //.ramp_out_en().enable()
+    });
+
+    // Enable headphone output
+    // pg. 764 This register is undocumented!
+    // 0x0324 HP_REG
+    //
+    // From: sun50iw10-codec.h
+    //
+    // #define HPRCALIVERIFY   24
+    // #define HPLCALIVERIFY   16
+    // #define HPPA_EN         15
+    // #define HPINPUTEN       11
+    // #define HPOUTPUTEN      10
+    // #define HPPA_DEL        8
+    // #define CP_CLKS         6
+    // #define HPCALIMODE      5
+    // #define HPCALIVERIFY    4
+    // #define HPCALIFIRST     3
+    // #define HPCALICKS       0
+    /*audio_codec.hp.modify(|_, w| {
+        w.hppa_en().enable()
+         .hpoutputen().enable()
+        // .hpinputen().enable()
     });*/
 
     // Turn on speaker ???
     // looks like this is actually NC on the RV Dock
-    /*let gpio = unsafe { pac::Peripherals::steal().GPIO };
+    let gpio = unsafe { pac::Peripherals::steal().GPIO };
     const PB12: u32 = 12;
     gpio.pb_cfg1.modify(|_, w| w.pb12_select().output());
-    gpio.pb_dat
-        .modify(|r, w| unsafe { w.bits(r.bits() | (1 << PB12)) });*/
+    gpio.pb_dat.modify(|r, w| unsafe {
+        w.pb_dat().bits(r.pb_dat().bits() | (0x1 << PB12))
+    });
 }
 
 // Audio Buffers
