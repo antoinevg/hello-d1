@@ -60,7 +60,7 @@ impl Dmac {
     ///
     /// 'Tis thine responsibility, that which thou doth summon.
     pub unsafe fn summon() -> Self {
-        let dmac =d1_pac::Peripherals::steal().DMAC;
+        let dmac = d1_pac::Peripherals::steal().DMAC;
         Self {
             dmac,
             channels: [

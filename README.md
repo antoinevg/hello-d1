@@ -71,6 +71,13 @@ Build from source:
     xfel exec 0x40000000
 
 
+## Noisy Audio Output
+
+Add a [RC Low Pass Filter](https://www.digikey.com/en/resources/conversion-calculators/conversion-calculator-low-pass-and-high-pass-filter) with -3dB Cutoff @ ~33.8kHz:
+
+    C = 100nF
+    R = 47R
+
 
 ## Greets fly to
 

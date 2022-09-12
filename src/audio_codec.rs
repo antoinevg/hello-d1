@@ -54,8 +54,6 @@ impl AudioCodec {
         // 2. configure sample rate, data transfer, open dac
         configure_dac(&audio_codec);
 
-        //enable_debug_mode(&audio_codec);
-
         Self {
             audio_codec,
             dma_descriptor_1: None,
@@ -76,6 +74,9 @@ impl AudioCodec {
 
         // configure analog path
         configure_analog_path(&self.audio_codec);
+
+        // test: enable debug mode
+        // enable_debug_mode(&self.audio_codec);
     }
 
     /// Obtain a static `AudioCodec` instance for use in
@@ -102,7 +103,7 @@ fn enable_debug_mode(audio_codec: &AUDIO_CODEC) {
     audio_codec.ac_dac_dg.write(|w| {
         w.dac_modu_select().debug()    // DAC_MODU_SELECT (0: Normal, 1: Debug)
          .dac_pattern_select().sin6()  // DAC_PATTERN_SELECT (0b00: Normal, 0b01: -6 dB Sine wave)
-         .codec_clk_select().osc()     // CODEC_CLK_SELECT (0: PLL, 1: OSC for Debug)
+         .codec_clk_select().pll()     // CODEC_CLK_SELECT (0: PLL, 1: OSC for Debug)
          .da_swp().disable()           // DA_SWP  (0: Disabled, 1: Enabled)
          .adda_loop_mode().disable()   // ADDA_LOOP_MODE (0b000: Disabled, 0b001: ADC1/ADC2, 0b010: ADC3)
     });
@@ -285,35 +286,11 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 00     FIFO_FLUSH             = 0   (0: self clear, 1: flush TX FIFO)
     audio_codec.ac_dac_fifoc.modify(|_, w| unsafe {
         w.dac_fs().fs48k()
-         //.send_last().zero()
+         .send_last().zero()
          .fifo_mode().little_endian()
-         //.dac_drq_clr_cnt().wlevel() // ?
-         //.tx_trig_level().bits(32) // ?
-         //.dac_mono_en().stereo()
-         .tx_sample_bits().bits_20()
+         .dac_mono_en().stereo()
+         .tx_sample_bits().bits_16()
     });
-
-    // FIFO flush
-    //audio_codec.ac_dac_fifoc.modify(|_, w| w.fifo_flush().flush());
-
-    // FIFO clear pending interrupts
-    //
-    // pg. 779 8.4.6.4 AC_DAC_FIFOS
-    // 0x0013 DAC FIFO Status Register (Default Value: 0x0080_8008)
-    //
-    // 31:24  ---
-    // 23     TX_EMPTY    (0: No room, 1: Room for more than one new sample)
-    // 22:08  TXE_CNT Empty Space
-    // 07:04  ---
-    // 03     TXE_INT Empty Pending Interrupt
-    // 02     TXU_INT Underrun Pending Interrupt
-    // 01     TXO_INT Overrun Pending Interrupt
-    // 00     ---
-    /*audio_codec.ac_dac_fifos.write(|w| {
-        w.txe_int().clear_or_pending()
-         .txu_int().clear_or_pending()
-         .txo_int().clear_or_pending()
-    });*/
 
     // Enable DAC digital part
     //
@@ -327,9 +304,8 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 00     HUB_EN  Audio Hub Enable  ?????
     audio_codec.ac_dac_dpc.modify(|_, w| unsafe {
         w.en_da().enable()
-         //.hpf_en().disable()
-         //.hub_en().disable()
-         //.dvol().bits(0) // ATT = 0 * -1.16dB = 0dB
+         .hpf_en().enable()
+         .dvol().bits(0) // ATT = 0 * -1.16dB = 0dB
     });
 
     // Set DAC Volume
@@ -373,20 +349,19 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     audio_codec.dac.modify(|_, w| unsafe {
         w.dacl_en().enable()
          .dacr_en().enable()
-         //.lineoutlen().enable()
+         .lineoutlen().disable()
          .lmute().unmute()
-         //.lineoutren().enable()
+         .lineoutren().disable()
          .rmute().unmute()
-         //.lineout_vol_ctrl().bits(0x1f)
+         .lineout_vol_ctrl().bits(0x0)
     });
 
-
-    // sun20iw1-codec.c:671 sunxi_codec_headphone_event
+    // Enable headphone LDO regulator
     audio_codec.power.modify(|_, w| {
-        w.hpldo_en().enable() // <============= THAT ONE!
+        w.hpldo_en().enable()
     });
 
-    // sun20iw1-codec.c:671 sunxi_codec_headphone_event
+    // Enable ramp manual control
     audio_codec.ramp.modify(|_, w| {
         w.rmc_en().enable()
     });
@@ -412,45 +387,21 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     // 09:08  HPFB_BUF_OUTPUT_CURRENT
     // 07:00  ---
     audio_codec.hp2.modify(|_, w| {
-        w//.hpfb_buf_en().enable() // ?
-         //.headphone_gain().db0()
-         //.opdrv_cur().max()
+        w.hpfb_buf_en().enable() // ?
+         .headphone_gain().db0()
          .hp_drven().enable()
          .hp_drvouten().enable()
-         //.ramp_out_en().enable()
+         .ramp_out_en().enable()
     });
-
-    // Enable headphone output
-    // pg. 764 This register is undocumented!
-    // 0x0324 HP_REG
-    //
-    // From: sun50iw10-codec.h
-    //
-    // #define HPRCALIVERIFY   24
-    // #define HPLCALIVERIFY   16
-    // #define HPPA_EN         15
-    // #define HPINPUTEN       11
-    // #define HPOUTPUTEN      10
-    // #define HPPA_DEL        8
-    // #define CP_CLKS         6
-    // #define HPCALIMODE      5
-    // #define HPCALIVERIFY    4
-    // #define HPCALIFIRST     3
-    // #define HPCALICKS       0
-    /*audio_codec.hp.modify(|_, w| {
-        w.hppa_en().enable()
-         .hpoutputen().enable()
-        // .hpinputen().enable()
-    });*/
 
     // Turn on speaker ???
     // looks like this is actually NC on the RV Dock
-    let gpio = unsafe { pac::Peripherals::steal().GPIO };
+    /*let gpio = unsafe { pac::Peripherals::steal().GPIO };
     const PB12: u32 = 12;
     gpio.pb_cfg1.modify(|_, w| w.pb12_select().output());
     gpio.pb_dat.modify(|r, w| unsafe {
         w.pb_dat().bits(r.pb_dat().bits() | (0x1 << PB12))
-    });
+    });*/
 }
 
 // Audio Buffers
@@ -471,32 +422,15 @@ fn configure_dma(
     audio_codec: &AUDIO_CODEC,
     dmac: &mut Dmac
 ) -> (descriptor::Descriptor, descriptor::Descriptor) {
-    // generate some test noise
-    unsafe {
-        let mut counter = 0;
-        for frame in &mut TX_BUFFER_1 {
-            *frame = ((u32::pow(2, 20) / TX_BUFFER_1.len() as u32) * counter) as u32;
-            counter += 1;
-        }
-    }
-    unsafe {
-        let mut counter = 0;
-        for frame in &mut TX_BUFFER_2 {
-            *frame = ((u32::pow(2, 20) / TX_BUFFER_2.len() as u32) * counter) as u32;
-            counter += 1;
-        }
-    }
-
     // configure dma descriptors
     let ac_dac_txdata = &unsafe { &*AUDIO_CODEC::PTR }.ac_dac_txdata as *const _ as *mut ();
     let source = unsafe { TX_BUFFER_1.as_ptr().cast() };
-    //let byte_counter = TX_BUFFER_LENGTH * 4;
-    let byte_counter = unsafe { TX_BUFFER_1.len() };
+    let word_counter = unsafe { TX_BUFFER_1.len() };
     let descriptor_1_config = descriptor::DescriptorConfig {
         // memory
         source: source,
         destination: ac_dac_txdata,
-        byte_counter: byte_counter,
+        byte_counter: word_counter, // ?
         // config
         link: None,
         wait_clock_cycles: 0,
@@ -527,8 +461,12 @@ fn configure_dma(
     let descriptor_2_ptr = &descriptor_2 as *const Descriptor as *const ();
 
     // link descriptor_2 to descriptor_1
-    descriptor_1.link = descriptor_2_ptr as u32;
-    descriptor_1.link |= ((descriptor_2_ptr as usize >> 32) as u32) & 0b11;
+    //descriptor_1.link = descriptor_2_ptr as u32;
+    //descriptor_1.link |= ((descriptor_2_ptr as usize >> 32) as u32) & 0b11;
+
+    // link descriptor_1 to itself
+    descriptor_1.link = descriptor_1_ptr as u32;
+    descriptor_1.link |= ((descriptor_1_ptr as usize >> 32) as u32) & 0b11;
 
     (descriptor_1, descriptor_2)
 }
@@ -543,18 +481,21 @@ fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac, descriptor: &d
 
         // enable interrupts
         dmac.irq_en0().write(|w| {
-            w //.dma0_hlaf_irq_en().set_bit()
-                .dma0_pkg_irq_en().set_bit()
-                .dma0_queue_irq_en().set_bit()
+            w.dma0_hlaf_irq_en().set_bit()
+             .dma0_pkg_irq_en().set_bit()
+             .dma0_queue_irq_en().set_bit()
         });
 
         dmac.channels[channel]
-            .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Handshake);
+        //    .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Handshake);
         //    .set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Handshake);
-        //    .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
+            .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
         //    .set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Wait);
         dmac.channels[channel].start_descriptor(NonNull::from(descriptor));
     }
+
+    // FIFO flush
+    audio_codec.ac_dac_fifoc.modify(|_, w| w.fifo_flush().flush());
 
     // FIFO clear sample counter
     //
@@ -562,7 +503,26 @@ fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac, descriptor: &d
     // 0x0024 DAC TX Counter Register (Default Value: 0x0000_0000)
     //
     // 31:00  TX_CNT TX Sample Counter
-    //audio_codec.ac_dac_cnt.write(|w| unsafe { w.bits(0) });
+    audio_codec.ac_dac_cnt.write(|w| unsafe { w.bits(0) });
+
+    // FIFO clear pending interrupts
+    //
+    // pg. 779 8.4.6.4 AC_DAC_FIFOS
+    // 0x0013 DAC FIFO Status Register (Default Value: 0x0080_8008)
+    //
+    // 31:24  ---
+    // 23     TX_EMPTY    (0: No room, 1: Room for more than one new sample)
+    // 22:08  TXE_CNT Empty Space
+    // 07:04  ---
+    // 03     TXE_INT Empty Pending Interrupt
+    // 02     TXU_INT Underrun Pending Interrupt
+    // 01     TXO_INT Overrun Pending Interrupt
+    // 00     ---
+    audio_codec.ac_dac_fifos.write(|w| {
+        w.txe_int().set_bit()
+         .txu_int().set_bit()
+         .txo_int().set_bit()
+    });
 
     // enable dac interrupts - all of them here ?
     audio_codec.ac_dac_fifoc.modify(|_, w| {
@@ -571,9 +531,6 @@ fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac, descriptor: &d
          .fifo_underrun_irq_en().enable()
          .fifo_overrun_irq_en().enable()
     });
-
-    // FIFO flush
-    //audio_codec.ac_dac_fifoc.modify(|_, w| w.fifo_flush().flush());
 }
 
 // - Trim bandgap reference voltage. ------------------------------------------

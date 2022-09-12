@@ -3,6 +3,7 @@
 #![no_main]
 
 mod dsp;
+use dsp::osc;
 
 use d1_pac as pac;
 use panic_halt as _;
@@ -21,8 +22,8 @@ fn main() -> ! {
     logging::init(&p);
     println!("🦀 Hello Lichee RV D1!");
 
-    // trim bandgap reference voltage ???
-    // audio_codec::trim_bandgap_ref_voltage();
+    // trim bandgap reference voltage - breaks DMA ???
+    //audio_codec::trim_bandgap_ref_voltage();
 
     // gpio - led
     let gpio = &p.GPIO;
@@ -71,10 +72,66 @@ fn main() -> ! {
     }
 }
 
-static mut COUNTER: usize = 0;
+
+unsafe fn handle_dma_interrupt(half: bool) {
+    // state
+    static mut OSC: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
+    OSC.dx = (1. / 48_000.) * 440.;
+
+    let skip = if half {
+        (0, audio_codec::TX_BUFFER_LENGTH / 2)
+    } else {
+        (audio_codec::TX_BUFFER_LENGTH / 2, 0)
+    };
+
+    // fill buffer
+    let half_buffer_length = audio_codec::TX_BUFFER_LENGTH / 2;
+    let mut frame_index = 0;
+    while frame_index < half_buffer_length {
+        let tx0 = frame_index + skip.0;
+        let tx1 = tx0 + 1;
+
+        let sample = f32_to_u16(OSC.step()) as u32;
+        audio_codec::TX_BUFFER_1[tx0] = sample;
+        audio_codec::TX_BUFFER_1[tx1] = sample;
+
+        frame_index += 2;
+    }
+}
+
+
+#[inline(always)]
+pub fn f32_to_u16(x: f32) -> u16 {
+    //return (int16_t) __SSAT((int32_t) (x * 32767.f), 16);
+    let x = x * 32_767.;
+    let x = if x > 32_767. {
+        32_767.
+    } else if x < -32_768. {
+        -32_768.
+    } else {
+        x
+    };
+    (x as i16) as u16
+}
+
+#[inline(always)]
+fn f32_to_u20(x: f32) -> u32 {
+    let x = x * 524_287.;
+    let x = if x > 524_287. {
+        524_287.
+    } else if x < -524_288. {
+        -524_288.
+    } else {
+        x
+    };
+    (x as i32) as u32
+}
+
 
 #[export_name = "MachineExternal"]
 extern "C" fn MachineExternal() {
+    static mut COUNTER: usize = 0;
+
     let plic = unsafe { plic::Plic::summon() };
 
     // Claim interrupt
@@ -105,16 +162,18 @@ extern "C" fn MachineExternal() {
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_hlaf_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_hlaf_irq_pend().bit_is_set() {}
+                unsafe { handle_dma_interrupt(false) };
             }
             if pending.dma0_pkg_irq_pend().is_pending() {
                 // end of package
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_pkg_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_pkg_irq_pend().bit_is_set() {}
-
+                unsafe { handle_dma_interrupt(true) };
             }
             if pending.dma0_queue_irq_pend().is_pending() {
                 // end of queue
+                println!("eoq");
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_queue_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_queue_irq_pend().bit_is_set() {}
