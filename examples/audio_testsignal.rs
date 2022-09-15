@@ -8,11 +8,14 @@ use dsp::osc;
 use d1_pac as pac;
 use panic_halt as _;
 
-use hello_d1::audio_codec::{self, BLOCK_LENGTH};
+use hello_d1::audio_codec;
 use hello_d1::dmac;
 use hello_d1::logging;
 use hello_d1::plic;
 use hello_d1::println;
+
+// Audio Buffer: 2 buffers * 2 channels * 32 samples = ~ 0.67 ms latency
+static mut TX_BUFFER: [u32; 2 * 2 * 32] = [0; 2 * 2 * 32];
 
 #[riscv_rt::entry]
 fn main() -> ! {
@@ -21,9 +24,6 @@ fn main() -> ! {
     // logging
     logging::init(&p);
     println!("🦀 Hello Lichee RV D1!");
-
-    // trim bandgap reference voltage ???
-    //audio_codec::trim_bandgap_ref_voltage();
 
     // gpio - led
     let gpio = &p.GPIO;
@@ -55,7 +55,7 @@ fn main() -> ! {
     }
 
     // audio_codec - start
-    audio_codec.start(&mut dmac);
+    audio_codec.start(&mut dmac, unsafe { &TX_BUFFER });
 
     // blinky
     loop {
@@ -72,127 +72,66 @@ fn main() -> ! {
     }
 }
 
+/// DMA half-transfer interrupt handler for audio_codec data
 unsafe fn handle_dma_interrupt(half: bool) {
-    // state
-    static mut F: f32 = 0.;
+    // oscillator state
     static mut OSC: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
-    OSC.dx = (1. / 48_000.) * (220. + F);
+    static mut F: f32 = 0.;
 
+    let half_buffer_length = TX_BUFFER.len() / 2;
     let skip = if half {
         0
     } else {
-        audio_codec::TX_BUFFER_LENGTH / 2
+        half_buffer_length
     };
 
     // fill buffer
-    let half_buffer_length = audio_codec::TX_BUFFER_LENGTH / 2;
     let mut frame_index = 0;
     while frame_index < half_buffer_length {
-        let tx0 = frame_index + skip;
-        let tx1 = tx0 + 1;
 
-        let sample = f32_to_u16(OSC.step());
-        audio_codec::TX_BUFFER[tx0] = sample as u32;
-        audio_codec::TX_BUFFER[tx1] = sample as u32;
-
-        //F += 0.01;
+        // whoop! whoop!
+        F += 0.01;
         if F >= 500. {
             F = 0.;
         }
+        OSC.dx = (1. / 48_000.) * (220. + F);
+        let sample = dsp::f32_to_u20(OSC.step());
+
+        let x = frame_index + skip;
+        TX_BUFFER[x + 0] = sample as u32;
+        TX_BUFFER[x + 1] = sample as u32;
 
         frame_index += 2;
     }
 }
 
-#[inline(always)]
-pub fn f32_to_u16(x: f32) -> u16 {
-    //return (int16_t) __SSAT((int32_t) (x * 32767.f), 16);
-    let x = x * 32_767.;
-    let x = if x > 32_767. {
-        32_767.
-    } else if x < -32_768. {
-        -32_768.
-    } else {
-        x
-    };
-    (x as i16) as u16
-}
-
-#[inline(always)]
-fn f32_to_u20(x: f32) -> u32 {
-    let x = x * 524_287.;
-    let x = if x > 524_287. {
-        524_287.
-    } else if x < -524_288. {
-        -524_288.
-    } else {
-        x
-    };
-    (x as i32) as u32
-}
-
-
 #[export_name = "MachineExternal"]
 extern "C" fn MachineExternal() {
-    static mut AC_COUNTER: usize = 0;
-    static mut DMA_COUNTER: usize = 0;
-
     let plic = unsafe { plic::Plic::summon() };
 
-    // Claim interrupt
+    // claim interrupt
     let claim = plic.claim();
 
     match claim {
-        pac::Interrupt::GPIOE_NS => {
-            let gpio = unsafe { &*pac::GPIO::PTR };
-
-            // clear pending interrupts
-            gpio.pe_eint_status
-                .modify(|_r, w| w.eint8_status().set_bit());
-            while gpio.pe_eint_status.read().eint8_status().bit_is_set() {}
-        }
         pac::Interrupt::DMAC_NS => {
             let dmac = unsafe { &*pac::DMAC::PTR };
-
-            // get some stats
-            let packages = dmac.dmac_pkg_num0.read().bits();
-            let left = dmac.dmac_bcnt_left0.read().bits();
 
             // get pending interrupts
             let pending = dmac.dmac_irq_pend0.read();
 
             // clear all pending interrupts
             if pending.dma0_hlaf_irq_pend().is_pending() {
-                // half package
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_hlaf_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_hlaf_irq_pend().bit_is_set() {}
                 unsafe { handle_dma_interrupt(true) };
             }
             if pending.dma0_pkg_irq_pend().is_pending() {
-                // end of package
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_pkg_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_pkg_irq_pend().bit_is_set() {}
                 unsafe { handle_dma_interrupt(false) };
             }
-            if pending.dma0_queue_irq_pend().is_pending() {
-                // end of queue
-                println!("eoq");
-                dmac.dmac_irq_pend0
-                    .write(|w| w.dma0_queue_irq_pend().set_bit());
-                while dmac.dmac_irq_pend0.read().dma0_queue_irq_pend().bit_is_set() {}
-            }
-
-            // dump some debug info
-            let counter = unsafe { DMA_COUNTER };
-            if counter % 5000 == 0 {
-                println!("DMAC_NS pend:{:#05b}", pending.bits()); // 0: idle, 1: busy
-                println!("DMAC_NS pkg:{}", packages);
-                println!("DMAC_NS left:{}\n", left);
-            }
-
-            unsafe { DMA_COUNTER += 1 };
         }
         pac::Interrupt::AUDIO_CODEC => {
             let audio_codec = unsafe { &*pac::AUDIO_CODEC::PTR };
@@ -201,10 +140,6 @@ extern "C" fn MachineExternal() {
             let pending = audio_codec.ac_dac_fifos.read();
 
             // clear all pending interrupts
-            if pending.txe_int().is_pending() {
-                audio_codec.ac_dac_fifos.write(|w| w.txe_int().set_bit());
-                while audio_codec.ac_dac_fifos.read().txe_int().bit_is_set() {}
-            }
             if pending.txo_int().is_pending() {
                 println!("overrun");
                 audio_codec.ac_dac_fifos.write(|w| w.txo_int().set_bit());
@@ -215,15 +150,6 @@ extern "C" fn MachineExternal() {
                 audio_codec.ac_dac_fifos.write(|w| w.txu_int().set_bit());
                 while audio_codec.ac_dac_fifos.read().txu_int().bit_is_set() {}
             }
-
-            // dump some debug info
-            let counter = unsafe { AC_COUNTER };
-            if counter % 50000 == 0 {
-                let count = audio_codec.ac_dac_cnt.read().bits();
-                println!("ac_dac_cnt: {} / {}", count, count / 48_000);
-            }
-
-            unsafe { AC_COUNTER += 1 };
         }
         x => {
             println!("Unexpected claim: {:?}", x);

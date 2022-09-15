@@ -57,7 +57,7 @@ Build from source:
 
 ## Build, flash & run
 
-    cargo build
+    cargo build --release --example audio_testsignal
 
     rust-objcopy target/riscv64imac-unknown-none-elf/debug/test-d1-flash-bare \
         --binary-architecture=riscv64 \
