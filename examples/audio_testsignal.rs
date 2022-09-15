@@ -22,7 +22,7 @@ fn main() -> ! {
     logging::init(&p);
     println!("🦀 Hello Lichee RV D1!");
 
-    // trim bandgap reference voltage - breaks DMA ???
+    // trim bandgap reference voltage ???
     //audio_codec::trim_bandgap_ref_voltage();
 
     // gpio - led
@@ -72,33 +72,37 @@ fn main() -> ! {
     }
 }
 
-
 unsafe fn handle_dma_interrupt(half: bool) {
     // state
+    static mut F: f32 = 0.;
     static mut OSC: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
-    OSC.dx = (1. / 48_000.) * 440.;
+    OSC.dx = (1. / 48_000.) * (220. + F);
 
     let skip = if half {
-        (0, audio_codec::TX_BUFFER_LENGTH / 2)
+        0
     } else {
-        (audio_codec::TX_BUFFER_LENGTH / 2, 0)
+        audio_codec::TX_BUFFER_LENGTH / 2
     };
 
     // fill buffer
     let half_buffer_length = audio_codec::TX_BUFFER_LENGTH / 2;
     let mut frame_index = 0;
     while frame_index < half_buffer_length {
-        let tx0 = frame_index + skip.0;
+        let tx0 = frame_index + skip;
         let tx1 = tx0 + 1;
 
-        let sample = f32_to_u16(OSC.step()) as u32;
-        audio_codec::TX_BUFFER_1[tx0] = sample;
-        audio_codec::TX_BUFFER_1[tx1] = sample;
+        let sample = f32_to_u16(OSC.step());
+        audio_codec::TX_BUFFER[tx0] = sample as u32;
+        audio_codec::TX_BUFFER[tx1] = sample as u32;
+
+        //F += 0.01;
+        if F >= 500. {
+            F = 0.;
+        }
 
         frame_index += 2;
     }
 }
-
 
 #[inline(always)]
 pub fn f32_to_u16(x: f32) -> u16 {
@@ -130,7 +134,8 @@ fn f32_to_u20(x: f32) -> u32 {
 
 #[export_name = "MachineExternal"]
 extern "C" fn MachineExternal() {
-    static mut COUNTER: usize = 0;
+    static mut AC_COUNTER: usize = 0;
+    static mut DMA_COUNTER: usize = 0;
 
     let plic = unsafe { plic::Plic::summon() };
 
@@ -162,14 +167,14 @@ extern "C" fn MachineExternal() {
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_hlaf_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_hlaf_irq_pend().bit_is_set() {}
-                unsafe { handle_dma_interrupt(false) };
+                unsafe { handle_dma_interrupt(true) };
             }
             if pending.dma0_pkg_irq_pend().is_pending() {
                 // end of package
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_pkg_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_pkg_irq_pend().bit_is_set() {}
-                unsafe { handle_dma_interrupt(true) };
+                unsafe { handle_dma_interrupt(false) };
             }
             if pending.dma0_queue_irq_pend().is_pending() {
                 // end of queue
@@ -180,12 +185,14 @@ extern "C" fn MachineExternal() {
             }
 
             // dump some debug info
-            let counter = unsafe { COUNTER };
-            if counter % 1000 == 0 {
+            let counter = unsafe { DMA_COUNTER };
+            if counter % 5000 == 0 {
                 println!("DMAC_NS pend:{:#05b}", pending.bits()); // 0: idle, 1: busy
                 println!("DMAC_NS pkg:{}", packages);
                 println!("DMAC_NS left:{}\n", left);
             }
+
+            unsafe { DMA_COUNTER += 1 };
         }
         pac::Interrupt::AUDIO_CODEC => {
             let audio_codec = unsafe { &*pac::AUDIO_CODEC::PTR };
@@ -210,18 +217,18 @@ extern "C" fn MachineExternal() {
             }
 
             // dump some debug info
-            let counter = unsafe { COUNTER };
-            if counter % 30000 == 0 {
+            let counter = unsafe { AC_COUNTER };
+            if counter % 50000 == 0 {
                 let count = audio_codec.ac_dac_cnt.read().bits();
                 println!("ac_dac_cnt: {} / {}", count, count / 48_000);
             }
+
+            unsafe { AC_COUNTER += 1 };
         }
         x => {
             println!("Unexpected claim: {:?}", x);
         }
     }
-
-    unsafe { COUNTER += 1 };
 
     // Release claim
     plic.complete(claim);

@@ -29,6 +29,34 @@
 /// 3. Configure the DMA and DMA request.
 /// 4. Enable the DAC DRQ and DMA.
 ///
+/// Linux Audio: https://wiki.sipeed.com/hardware/en/lichee/RV/user.html
+/// Dump from Linux: `busybox devmem 0x02030000`
+///
+/// CCU 0x02001000
+/// AUDIO_CODEC_BGR_REG       0x02001a5c  0x00010001  ..
+/// AUDIO_CODEC_DAC_CLK_REG   0x02001a50  0x80000003  0x80000000
+/// PLL_AUDIO0_CTRL_REG       0x02001078  0xF8001D01  0xf9042701
+/// PLL_AUDIO0_PAT0_CTRL_REG  0x02001178  0x4001288D  0xc001eb85
+/// PLL_AUDIO0_PAT1_CTRL_REG  0x0200117c  0x00000000  ..
+/// PLL_AUDIO0_BIAS_REG       0x02001378  0x00030000  ..
+///
+/// AUDIO_CODEC 0x02030000
+/// AC_DAC_DPC                0x02030000  0x00000000  0x80000000
+/// DAC_VOL_CTRL              0x02030004  0x0001A0A0  ..
+/// AC_DAC_FIFOC              0x02030010  0x03004000  ..
+/// DAC_REG                   0x02030310  0x0015007A  0x0015c000
+/// RAMP_REG                  0x0203031c  0x00180000  0x00180002
+/// BIAS_REG                  0x02030320  0x0000007C  ..
+/// HP2_REG                   0x02030340  0x76404000  0x867ac000
+/// POWER_REG                 0x02030348  0x80013319  0xc0013319
+///
+/// Manual:
+///
+/// busybox devmem 0x02030000 w 0x80000000
+/// busybox devmem 0x02030348 w 0xC0013319
+/// busybox devmem 0x0203031c w 0x00180002
+
+
 use core::ptr::NonNull;
 
 use d1_pac as pac;
@@ -41,8 +69,7 @@ use crate::println;
 /// Built-in audio codec
 pub struct AudioCodec {
     audio_codec: AUDIO_CODEC,
-    dma_descriptor_1: Option<descriptor::Descriptor>,
-    dma_descriptor_2: Option<descriptor::Descriptor>,
+    dma_descriptor: Option<descriptor::Descriptor>,
 }
 
 impl AudioCodec {
@@ -56,27 +83,23 @@ impl AudioCodec {
 
         Self {
             audio_codec,
-            dma_descriptor_1: None,
-            dma_descriptor_2: None,
+            dma_descriptor: None,
         }
     }
 
     pub fn start(&mut self, dmac: &mut Dmac) {
         // 3. configure dma and dma request
-        let (descriptor_1, descriptor_2) = configure_dma(&self.audio_codec, dmac);
+        let descriptor = configure_dma(&self.audio_codec, dmac);
+        self.dma_descriptor = Some(descriptor);
 
         // 4. enable dac drq and dma
-        enable_dac_drq_dma(&self.audio_codec, dmac, &descriptor_1);
-
-        // save descriptors
-        self.dma_descriptor_1 = Some(descriptor_1);
-        self.dma_descriptor_2 = Some(descriptor_2);
+        enable_dac_drq_dma(&self.audio_codec, dmac, self.dma_descriptor.as_ref().unwrap());
 
         // configure analog path
         configure_analog_path(&self.audio_codec);
 
         // test: enable debug mode
-        // enable_debug_mode(&self.audio_codec);
+        //enable_debug_mode(&self.audio_codec);
     }
 
     /// Obtain a static `AudioCodec` instance for use in
@@ -90,8 +113,7 @@ impl AudioCodec {
     pub unsafe fn summon() -> Self {
         Self {
             audio_codec: d1_pac::Peripherals::steal().AUDIO_CODEC,
-            dma_descriptor_1: None,
-            dma_descriptor_2: None,
+            dma_descriptor: None,
         }
     }
 }
@@ -131,16 +153,18 @@ fn init_codec_ccu(ccu: &CCU) {
     // 16     AUDIO_CODEC Reset            = 1 (0: Assert, 1: De-assert)
     // 15:01  ---
     // 00     Gating Clock for AUDIO_CODEC = 0 (0: Mask, 1: Pass)
+    //
+    // xplayer: 0x00010001  0000_0000_0000_0001_0000_0000_0000_0001
     ccu.audio_codec_bgr.write(|w| {
         w.gating().pass()
          .rst().deassert()
     });
 
     // 2. configure PLL_Audio0 frequency and select PLL_Audio0
-    //
     // pg. 117 3.2.6.84 AUDIO_CODEC_DAC_CLK_REG
     // 0x0A50 AUDIO_CODEC_DAC Clock Register (Default Value: 0x0000_0000)
-    // Example: 1000_0000_0000_0000_0000_0000_0000_0000
+    //
+    // xplayer: 0x80000000  1000_0000_0000_0000_0000_0000_0000_0000
     //
     // AUDIO_CODEC_DAC_CLK = Clock Source / M / N = PLL_AUDIO0 / 1 / 1 = PLL_AUDIO0
     //
@@ -150,7 +174,7 @@ fn init_codec_ccu(ccu: &CCU) {
     // 23:10  ---
     // 09:08  Factor N            = 00    (00: /1, 01: /2, 10: /4, 11: /8)
     // 07:05  ---
-    // 04:00  Factor M            = 00000 (M = FACTOR_M + 1)
+    // 04:00  Factor M            = 00011 (M = FACTOR_M + 1)
     ccu.audio_codec_dac_clk.write(|w| unsafe {
         w.clk_gating().on()
          .clk_src_sel().pll_audio0_1x()
@@ -162,33 +186,33 @@ fn init_codec_ccu(ccu: &CCU) {
     //
     // pg. 64 3.2.6.7 PLL_AUDIO0_CTRL_REG
     // 0x0078 PLL_AUDIO0 Control Register (Default Value: 0x4814_5500)
-    // Default: 0100_1000_0001_1000_0101_0101_0000_0000
-    // Example: 1010_1001_0000_1011_0001_0111_0000_0001
+    // Default:               0100_1000_0001_0100_0101_0101_0000_0000
+    // xplayer:   0xf9042701  1111_1001_0000_0100_0010_0111_0000_0001
     //
-    // PLL_AUDIO0(1X) = (24MHz*N/M1/M0)/P/4 = (24000000 * 23 / 1 / 2) / 11 / 4 = 6272727.2727272725 ????
+    // PLL_AUDIO0(1X) = (24MHz*N/M0/M1)/P/4 = (24000000 * 85 / 1 / 1) / 20 / 4 = 25 500 000
+    //                                      = (24000000 * 39 / 1 / 2) / 19 / 4 =
     //
     // 31     PLL Enable               = 1
-    // 30     LDO Enable               = 0
-    // 29:28  LOCK Enable + PLL Lock   = 10
+    // 30     LDO Enable               = 1
+    // 29:28  LOCK Enable + PLL Lock   = 11
     // 27     PLL Output Gate Enable   = 1
-    // 26:25  ---
+    // 26:25  ---                        00
     // 24     PLL SDM Enable           = 1         = Enable spread spectrum and decimal division
-    // 23:22  ---
-    // 21:16  PLL Post-div P           = 00_1011   = 11
-    // 15:08  PLL N                    = 0001_0111 = 23
+    // 23:22  ---                      = 00
+    // 21:16  PLL Post-div P           = 00_0100   = D: 20   L: 4
+    // 15:08  PLL N                    = 0010_0111 = D: 85   L: 39
     // 07:06  PLL Unlock Level         = 00        = 21-29 Clock Cycles
     // 05     PLL Lock Level           = 0         = 24-26 Clock Cycles
     // 04:02  ---
-    // 01     PLL_INPUT_DIV_2          = 0         = M1 = PLL_INPUT_DIV2  + 1 = 1
-    // 00     PLL_OUTPUT_DIV_2         = 1         = M0 = PLL_OUTPUT_DIV2 + 1 = 2
-    ccu.pll_audio0_ctrl.write(|w| unsafe {
-        w.pll_en().disable()
-         .pll_ldo_en().disable()
-         .lock_enable().enable()
+    // 01     PLL_INPUT_DIV_2          = 0         = M1 = PLL_INPUT_DIV2  + 1 = 1 // D1
+    // 00     PLL_OUTPUT_DIV_2         = 1  L: 1   = M0 = PLL_OUTPUT_DIV2 + 1 = 1 // D2
+    ccu.pll_audio0_ctrl.modify(|_, w| unsafe {
+        w.pll_en().enable()
+         .pll_ldo_en().enable()
          .pll_output_gate().enable()
          .pll_sdm_en().enable()
-         .pll_p().bits(11)
-         .pll_n().bits(23)
+         .pll_p().bits(4)
+         .pll_n().bits(39)
          .pll_unlock_mdsel().cc_21_29()
          .pll_lock_mdsel().cc_24_26()
          .pll_input_div2().clear_bit()
@@ -197,53 +221,27 @@ fn init_codec_ccu(ccu: &CCU) {
 
     // pg. 74 3.2.6.19 PLL_AUDIO0_PAT0_CTRL_REG
     // 0x0178 PLL_AUDIO0 Pattern0 Control Register (Default Value: 0x0000_0000)
-    // Example: 1100_0000_0000_0001_0010_0110_1110_1001
+    //
+    // xplayer: 0xc001eb85  1100_0000_0000_0001_1110_1011_1000_0101
     //
     // 31     Sigma-Delta Pattern Enable = 1
     // 30:29  Spread Frequency Mode      = 10 = Triangular (1-bit)
     // 28:20  Wave Step                  = 0_0000_0000
     // 19     SDM Clock Select           = 0  = 24 MHz
     // 18:17  Frequency                  = 00 = 31.5 kHz
-    // 16:00  Wave Bottom                = 1_0010_0110_1110_1001 = 0x1_26e9 = 75497
-    //ccu.pll_audio0_pat0_ctrl.write(|w| unsafe { w.bits(0xc001_26e9) });
+    // 16:00  Wave Bottom                = 1_1110_1011_1000_0101 = 0x1EB85
     ccu.pll_audio0_pat0_ctrl.write(|w| unsafe {
         w.sig_delt_pat_en().set_bit()
          .spr_freq_mode().triangular_1()
          .wave_step().bits(0x0)
          .sdm_clk_sel().f_24_m()
          .freq().f_31_5_k()
-         .wave_bot().bits(0x1_26e9)
+         .wave_bot().bits(0b1_1110_1011_1000_0101)
     });
 
-    // pg. 75 3.2.6.20 PLL_AUDIO0_PAT1_CTRL_REG
-    // 0x017C PLL_AUDIO0 Pattern1 Control Register (Default Value: 0x0000_0000)
-    //
-    // 31:25  ---
-    // 24     Dither Enable
-    // 23:21  ---
-    // 20     Fraction Enable
-    // 19:17  ---
-    // 16:00  Fraction In
-    //ccu.pll_audio0_pat1_ctrl.write(|w| unsafe { w.bits(0x0000_0000) });
-    ccu.pll_audio0_pat1_ctrl.write(|w| unsafe {
-        w.dither_en().clear_bit()
-         .frac_en().clear_bit()
-         .frac_in().bits(0x0)
-    });
-
-    // pg. 78 3.2.6.29 0x0378 PLL_AUDIO0_BIAS_REG
-    // PLL_AUDIO0 Bias Register (Default Value: 0x0003_0000)
-    //
-    // 31:21  ---
-    // 20:16  PLL bias control = 3
-    // 15:00  ---
-    //ccu.pll_audio0_bias.write(|w| unsafe { w.bits(0x0003_0000) });
-    ccu.pll_audio0_bias.write(|w| unsafe {
-        w.pll_cp().bits(0x0)
-    });
-
-    // enable pll_audio0
-    ccu.pll_audio0_ctrl.modify(|_, w| w.pll_en().enable());
+    // write PLL_AUDIOx Control Register[Lock Enable] to 0 and then to 1
+    ccu.pll_audio0_ctrl.modify(|_, w| w.lock_enable().disable());
+    ccu.pll_audio0_ctrl.modify(|_, w| w.lock_enable().enable());
 
     // wait for pll_audio0 lock
     while ccu.pll_audio0_ctrl.read().lock().is_unlocked() {
@@ -304,8 +302,8 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 00     HUB_EN  Audio Hub Enable  ?????
     audio_codec.ac_dac_dpc.modify(|_, w| unsafe {
         w.en_da().enable()
-         .hpf_en().enable()
-         .dvol().bits(0) // ATT = 0 * -1.16dB = 0dB
+         //.hpf_en().enable()
+         //.dvol().bits(6) // ATT = 0 * -1.16dB = 0dB
     });
 
     // Set DAC Volume
@@ -319,8 +317,8 @@ fn configure_dac(audio_codec: &AUDIO_CODEC) {
     // 07:00  DAC_VOL_R
     audio_codec.dac_vol_ctrl.modify(|_, w| unsafe {
         w.dac_vol_sel().enable()
-         .dac_vol_l().bits(0xa0)
-         .dac_vol_r().bits(0xa0)
+         //.dac_vol_l().bits(0x98)
+         //.dac_vol_r().bits(0x98)
     });
 }
 
@@ -330,14 +328,16 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     // pg. 832 8.4.6.115 DAC Analog Control Register (Default Value: 0x0015_0000)
     // 0x0310 DAC_REG
     //
+    // Linux: 0x0015c000  0000_0000_0001_0101_1100_0000_0000_0000
+    //
     // 31:24  ---
     // 23     CURRENT_TEST_SELECT
     // 22     ---
-    // 21:20  IOPVRS
-    // 19:18  ILINEOUTAMPS
-    // 17:16  IOPDACS
-    // 15     DACL_EN ???
-    // 14     DACR_EN ???
+    // 21:20  IOPVRS           = 01
+    // 19:18  ILINEOUTAMPS     = 01
+    // 17:16  IOPDACS          = 01
+    // 15     DACL_EN          = 1
+    // 14     DACR_EN          = 1
     // 13     LINEOUTLEN
     // 12     LMUTE            (0: Mute, 1: Unmute)
     // 11     LINEOUTREN
@@ -347,7 +347,10 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     // 05     LINEOUTR_DIFFEN
     // 04:00  LINEOUT_VOL_CTRL (0x1f to 0x02, step=-1.5dB, mute = 0 or 1)
     audio_codec.dac.modify(|_, w| unsafe {
-        w.dacl_en().enable()
+        w.iopvrs().c7u()
+         .ilineoutamps().c7u()
+         .iopdacs().c7u()
+         .dacl_en().enable()
          .dacr_en().enable()
          .lineoutlen().disable()
          .lmute().unmute()
@@ -357,13 +360,20 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     });
 
     // Enable headphone LDO regulator
-    audio_codec.power.modify(|_, w| {
-        w.hpldo_en().enable()
+    // 0xc0013319  1100_0000_0000_0001_0011_0011_0001_1001
+    audio_codec.power.modify(|_, w| unsafe {
+        w.aldo_en().enable()
+         .hpldo_en().enable()
+         .aldo_output_voltage().v180()
+         .hpldo_output_voltage().v180()
+         .bg_trim().bits(0b0001_1001) // ?? default is 0x25
     });
 
     // Enable ramp manual control
-    audio_codec.ramp.modify(|_, w| {
-        w.rmc_en().enable()
+    // 0x00180002  0000_0000_0001_1000_0000_0000_0000_0010
+    audio_codec.ramp.modify(|_, w| unsafe {
+        w.ramp_clk_div_m().bits(24) // 20:16 0b11000
+         .rmc_en().enable()
     });
 
     // Enable headphone output
@@ -371,27 +381,38 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
     // pg. 844 8.4.6.121 Headphone2 Analog Control Register (Default Value: 0x0640_4000)
     // 0x0340 HP2_REG
     //
-    // 31     HPFB_BUF_EN - Headphone feedback buffer op enable
-    // 30:28  HEADPHONE GAIN  (0b000: 0dB, 0b001: -6dB ... 0b111: -42dB, -6dB step)
-    // 27:26  HPFB_RES
-    // 25:24  OPDRV_CUR       (00: Min, 01: Max)
-    // 23:22  IOPHP
-    // 21     HP_DRVEN - Headphone Driver enable
-    // 20     HP_DRVOUTEN - Headphone Driver Output Enable
-    // 19     RSWITCH
-    // 18     RAMPEN
-    // 17     HPFB_IN_EN
-    // 16     RAMP_FINAL_CONTROL
-    // 15     RAMP_OUT_EN
-    // 14:13  RAMP_FINAL_STATE_RES
-    // 09:08  HPFB_BUF_OUTPUT_CURRENT
+    // xplayer: 0x867ac000  1000_0110_0111_1010_1100_0000_0000_0000
+    //
+    // 31     HPFB_BUF_EN             = 1    Headphone feedback buffer op enable
+    // 30:28  HEADPHONE GAIN          = 000  (0b000: 0dB, 0b001: -6dB ... 0b111: -42dB, -6dB step)
+    // 27:26  HPFB_RES                = 01
+    // 25:24  OPDRV_CUR               = 10   (00: Min, 01: Max)
+    // 23:22  IOPHP                   = 01
+    // 21     HP_DRVEN                = 1    Headphone Driver enable
+    // 20     HP_DRVOUTEN             = 1    Headphone Driver Output Enable
+    // 19     RSWITCH                 = 1
+    // 18     RAMPEN                  = 0
+    // 17     HPFB_IN_EN              = 1
+    // 16     RAMP_FINAL_CONTROL      = 0
+    // 15     RAMP_OUT_EN             = 1
+    // 14:13  RAMP_FINAL_STATE_RES    = 10
+    // 09:08  HPFB_BUF_OUTPUT_CURRENT = 00
     // 07:00  ---
-    audio_codec.hp2.modify(|_, w| {
-        w.hpfb_buf_en().enable() // ?
+    audio_codec.hp2.modify(|_, w| unsafe {
+        w.hpfb_buf_en().enable()
          .headphone_gain().db0()
+         .hpfb_res().r1000k()
+         .opdrv_cur().bits(0b10)
+         .iophp().c7u()
          .hp_drven().enable()
          .hp_drvouten().enable()
+         .rswitch().vra1()
+         .rampen().disable()
+         .hpfb_in_en().enable()
+         .ramp_final_control().select_ramp()
          .ramp_out_en().enable()
+         .ramp_final_state_res().r10k()
+         .hpfb_buf_output_current().i35()
     });
 
     // Turn on speaker ???
@@ -407,11 +428,10 @@ fn configure_analog_path(audio_codec: &AUDIO_CODEC) {
 // Audio Buffers
 //
 // TODO pg. 225  make sure that TX_BUFFER_1 is word-aligned
-pub const BLOCK_LENGTH: usize = 256;
+pub const BLOCK_LENGTH: usize = 128;
 pub const STEREO_BLOCK_LENGTH: usize = BLOCK_LENGTH * 2; // 2 channels
 pub const TX_BUFFER_LENGTH: usize = STEREO_BLOCK_LENGTH;
-pub static mut TX_BUFFER_1: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
-pub static mut TX_BUFFER_2: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
+pub static mut TX_BUFFER: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
 
 /// 8.4.4.2 Playback Process, page 769-770
 ///
@@ -421,16 +441,16 @@ pub static mut TX_BUFFER_2: [u32; TX_BUFFER_LENGTH] = [0; TX_BUFFER_LENGTH];
 fn configure_dma(
     audio_codec: &AUDIO_CODEC,
     dmac: &mut Dmac
-) -> (descriptor::Descriptor, descriptor::Descriptor) {
-    // configure dma descriptors
+) -> descriptor::Descriptor {
+    // configure dma descriptor
     let ac_dac_txdata = &unsafe { &*AUDIO_CODEC::PTR }.ac_dac_txdata as *const _ as *mut ();
-    let source = unsafe { TX_BUFFER_1.as_ptr().cast() };
-    let word_counter = unsafe { TX_BUFFER_1.len() };
-    let descriptor_1_config = descriptor::DescriptorConfig {
+    let source = unsafe { TX_BUFFER.as_ptr().cast() };
+    let byte_counter = unsafe { TX_BUFFER.len() } * core::mem::size_of::<u32>();
+    let descriptor_config = descriptor::DescriptorConfig {
         // memory
         source: source,
         destination: ac_dac_txdata,
-        byte_counter: word_counter, // ?
+        byte_counter: byte_counter,
         // config
         link: None,
         wait_clock_cycles: 0,
@@ -446,29 +466,16 @@ fn configure_dma(
         src_block_size: descriptor::BlockSize::Byte4,
         src_drq_type: descriptor::SrcDrqType::Dram,
     };
-    let mut descriptor_2_config = descriptor_1_config.clone();
 
-    // create descriptor_1
-    let mut descriptor_1: Descriptor = descriptor_1_config.try_into().unwrap();
-    let descriptor_1_ptr = &descriptor_1 as *const Descriptor as *const ();
+    // create descriptor
+    let mut descriptor: Descriptor = descriptor_config.try_into().unwrap();
+    let descriptor_ptr = &descriptor as *const Descriptor as *const ();
 
-    // link descriptor_1 to descriptor_2
-    descriptor_2_config.source = unsafe { TX_BUFFER_2.as_ptr().cast() };
-    descriptor_2_config.link = Some(descriptor_1_ptr);
+    // link descriptor to itself
+    descriptor.link = descriptor_ptr as u32;
+    descriptor.link |= ((descriptor_ptr as usize >> 32) as u32) & 0b11;
 
-    // create descriptor_2
-    let descriptor_2: Descriptor = descriptor_2_config.try_into().unwrap();
-    let descriptor_2_ptr = &descriptor_2 as *const Descriptor as *const ();
-
-    // link descriptor_2 to descriptor_1
-    //descriptor_1.link = descriptor_2_ptr as u32;
-    //descriptor_1.link |= ((descriptor_2_ptr as usize >> 32) as u32) & 0b11;
-
-    // link descriptor_1 to itself
-    descriptor_1.link = descriptor_1_ptr as u32;
-    descriptor_1.link |= ((descriptor_1_ptr as usize >> 32) as u32) & 0b11;
-
-    (descriptor_1, descriptor_2)
+    descriptor
 }
 
 /// 8.4.4.2 Playback Process, page 769-770
@@ -487,9 +494,9 @@ fn enable_dac_drq_dma(audio_codec: &AUDIO_CODEC, dmac: &mut Dmac, descriptor: &d
         });
 
         dmac.channels[channel]
-        //    .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Handshake);
+            .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Handshake);
         //    .set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Handshake);
-            .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
+        //    .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
         //    .set_channel_modes(dmac::ChannelMode::Handshake, dmac::ChannelMode::Wait);
         dmac.channels[channel].start_descriptor(NonNull::from(descriptor));
     }
