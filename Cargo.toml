@@ -4,13 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-#riscv = { version = "=0.8.0" }
-#riscv-rt = "=0.9.0"
-riscv = { git = "https://github.com/rust-embedded/riscv" }
-riscv-rt = { git = "https://github.com/rust-embedded/riscv-rt", rev = "28806e0b0ca3b3980ef3f886d5b56283d47daef1" }
-#d1-pac = { version = "=0.0.27" } #, features = ["rt"] }
-d1-pac = { git = "https://github.com/antoinevg/aw-pac", branch = "antoinevg/audio_codec" }
-#d1-pac = { path = "../upstream/aw-pac.git/d1-pac" }
+riscv = { version = "=0.8.0" }
+riscv-rt = "=0.9.0"
+d1-pac = { git = "https://github.com/duskmoon314/aw-pac" }
 panic-halt = "=0.2.0"
 
 [profile.release]
