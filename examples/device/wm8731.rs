@@ -20,7 +20,7 @@ pub enum Register {
     RESET  = 0x0F,
 }
 
-pub const DEFAULT_CONFIG: &[(Register, u8)] = &[
+pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     (Register::PWR,    0x80),
     (Register::RESET,  0x00),
     (Register::ACTIVE, 0x00),
