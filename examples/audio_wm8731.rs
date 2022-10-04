@@ -37,14 +37,27 @@ fn main() -> ! {
     let ccu = p.CCU;
 
     // configure wm8731 over i2c
+    println!("configure wm8731");
     let i2c = twi::Twi::new(p.TWI0, &gpio, &ccu);
+    let device_id = wm8731::DEVICE_ID_A;
     for (register, value) in wm8731::DEFAULT_CONFIG {
-        let register  = *register as u8;
-        let byte1: u8 = ((register << 1) & 0b1111_1110) | ((value >> 7) & 0b0000_0001u8);
-        let byte2: u8 = value & 0b1111_1111;
-        i2c.write(wm8731::DEVICE_ID_A, register, &[byte1, byte2]);
+        let register = *register as u8;
+
+        // 7 bit register address + 9 bits of data
+        let frame = [
+            ((register << 1) & 0xfe) | ((value >> 8) & 0x01) as u8,
+            (value & 0xff) as u8,
+        ];
+
+        match i2c.write(device_id, None, &frame) {
+            Ok(()) => (),
+            Err(e) => {
+                println!("error configuring wm8731, aborting: {:?}", e);
+                break;
+            }
+        }
         unsafe {
-            riscv::asm::delay(10_000);
+            riscv::asm::delay(50_000);
         }
     }
 
@@ -54,25 +67,27 @@ fn main() -> ! {
 
     // dmac
     let mut dmac = dmac::Dmac::new(p.DMAC, &mut ccu);
-
+*/
     // plic
-    let plic = plic::Plic::new(p.PLIC);
+    /*let plic = plic::Plic::new(p.PLIC);
     unsafe {
-        plic.set_priority(pac::Interrupt::DMAC_NS, plic::Priority::P1);
-        plic.set_priority(pac::Interrupt::I2S_PCM2, plic::Priority::P1);
-        plic.unmask(pac::Interrupt::DMAC_NS);
-        plic.unmask(pac::Interrupt::I2S_PCM2);
-    }
+        //plic.set_priority(pac::Interrupt::TWI0, plic::Priority::P1);
+        //plic.set_priority(pac::Interrupt::DMAC_NS, plic::Priority::P1);
+        //plic.set_priority(pac::Interrupt::I2S_PCM2, plic::Priority::P1);
+        //plic.unmask(pac::Interrupt::TWI0);
+        //plic.unmask(pac::Interrupt::DMAC_NS);
+        //plic.unmask(pac::Interrupt::I2S_PCM2);
+    }*/
 
     // enable interrupts
-    unsafe {
+    /*unsafe {
         riscv::interrupt::enable();
         riscv::register::mie::set_mext();
-    }
+    }*/
 
     // i2s - start
-    i2s.start(&mut dmac, unsafe { &TX_BUFFER });
-*/
+    //i2s.start(&mut dmac, unsafe { &TX_BUFFER });
+
     // blinky
     loop {
         gpio.pc_dat
@@ -129,6 +144,32 @@ extern "C" fn MachineExternal() {
     let claim = plic.claim();
 
     match claim {
+        pac::Interrupt::TWI0 => {
+            let twi0 = unsafe { &*pac::TWI0::PTR };
+
+            //println!("TIW0");
+
+            /*if twi0.twi_cntr.read().int_flag().bit_is_set() {
+                twi0.twi_cntr.modify(|_, w| {
+                    w.int_flag().clear_bit()
+                });
+                while twi0.twi_cntr.read().int_flag().bit_is_set() {
+                    println!(".");
+                }
+            }*/
+
+            /*twi0.twi_cntr.modify(|_, w| {
+                w.int_flag().clear_bit()
+            });*/
+
+            /*while twi0.twi_cntr.read().int_flag().bit_is_set() {
+                println!("..");
+            }*/
+
+            //let status = twi0.twi_stat.read().sta();
+            //println!("TWI0: {} {:?}", status.bits(), status.variant().unwrap());
+            //println!("TWI0: {:0x}", status.bits());
+        }
         pac::Interrupt::DMAC_NS => {
             let dmac = unsafe { &*pac::DMAC::PTR };
 
