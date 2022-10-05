@@ -117,5 +117,23 @@ fn init_i2s_pcm2_ccu(ccu: &CCU) {
 }
 
 fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
+    // disable i2c_pcm2
+    i2s_pcm2.i2s_pcm_ctl.modify(|_, w| {
+        w.gen().disable()
+         .txen().disable()
+         .rxen().disable()
+    });
+
+    // flush tx/rx fifo
+    i2s_pcm2.i2s_pcm_fctl.modify(|_, w| {
+        w.ftx().flush()
+         .frx().flush()
+    });
+
+    // clear tx/rx fifo counters
+    i2s_pcm2.i2s_pcm_txcnt.write(|w| unsafe { w.tx_cnt().bits(0) });
+    i2s_pcm2.i2s_pcm_rxcnt.write(|w| unsafe { w.rx_cnt().bits(0) });
+
+    // configure i2c_pcm2
 
 }
