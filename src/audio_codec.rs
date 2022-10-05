@@ -91,7 +91,7 @@ fn init_codec_ccu(ccu: &CCU) {
          .rst().deassert()
     });
 
-    // configure PLL_Audio0 frequency and select PLL_Audio0
+    // select PLL_Audio0 and open clock gating
     // pg. 117 3.2.6.84 AUDIO_CODEC_DAC_CLK_REG
     // 0x0A50 AUDIO_CODEC_DAC Clock Register (Default Value: 0x0000_0000)
     //

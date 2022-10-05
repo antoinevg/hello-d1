@@ -9,6 +9,7 @@ edition = "2021"
 riscv = { git = "https://github.com/rust-embedded/riscv" }
 riscv-rt = { git = "https://github.com/rust-embedded/riscv-rt" }
 d1-pac = { git = "https://github.com/duskmoon314/aw-pac" }
+#d1-pac = { path = "../upstream/aw-pac.git/d1-pac" }
 panic-halt = "=0.2.0"
 
 [profile.release]
