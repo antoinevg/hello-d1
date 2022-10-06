@@ -174,22 +174,21 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
             .rx_pdm().linear() // linear PCM / u-law / A-law
             .tx_pdm().linear() // linear PCM / u-law / A-law
     });
-    // the rest of these are only needed for TDM I think
     /*i2s_pcm2.i2s_pcm_chcfg.modify(|_, w| {
-        w
-            .tx_slot_hiz().normal()  // defaults
-            .tx_state().zero()       // defaults
+        // this is only needed for TDM I think
+        w.tx_slot_hiz().normal()  // defaults
+         .tx_state().zero()       // defaults
+    });*/
+    i2s_pcm2.i2s_pcm_tx0chsel.modify(|_, w| unsafe {
+        w.offset().bits(1) // I2S: 1
+         .chsel().bits(1)  // Num slots = n + 1
+         .chen().bits(0b0000_0000_0000_0011) // Enable slots 0 & 1
     });
-    i2s_pcm2.i2s_pcm_tx0chsel.modify(|_, w| {
-        w
+    i2s_pcm2.i2s_pcm_tx0chmap1.modify(|_, w| unsafe {
+        w.ch0_map().bits(0)
+         .ch1_map().bits(1)
     });
-    i2s_pcm2.i2s_pcm_tx0chmap0.modify(|_, w| {
-        w
-    });
-    i2s_pcm2.i2s_pcm_tx0chmap1.modify(|_, w| {
-        w
-    });
-    i2s_pcm2.i2s_pcm_rxchsel.modify(|_, w| {
+    /*i2s_pcm2.i2s_pcm_rxchsel.modify(|_, w| {
         w
     });
     i2s_pcm2.i2s_pcm_rxchmap0.modify(|_, w| {
