@@ -19,7 +19,7 @@ pub enum Register {
     ACTIVE = 0x09, // 0000_1001
     RESET  = 0x0F,
 }
-/*
+
 pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     (Register::PWR,    0x80),
     (Register::RESET,  0x00),
@@ -31,8 +31,8 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     (Register::APDIGI, 0x00),
     (Register::PWR,    0x00),
 
-    (Register::IFACE,  0b01001110), // MS=master, IWL=32bit, FORMAT=i2s
-    //(Register::IFACE,  0b00001110),   // MS=slave, IWL=32bit, FORMAT=i2s
+    (Register::IFACE,  0b0100_1110), // MS=i2s_clock_internal, IWL=32bit, FORMAT=i2s
+    //(Register::IFACE,  0b00001110),   // MS=i2s_clock_external, IWL=32bit, FORMAT=i2s
     //(Register::IFACE,  0b0000_0010), // 0x02 FORMAT=b10 IRL=b00 LRP=0 LRSWAP=0 MS=0 BCKLINV=0
     //(Register::IFACE,  0b0100_0010), // 0x42 FORMAT=b10 IRL=b00 LRP=0 LRSWAP=0 MS=1 BCKLINV=0
 
@@ -45,8 +45,8 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     (Register::RHPOUT, 0x79),  // 0dB
     (Register::ACTIVE, 0x01),
 ];
-*/
 
+/*
 pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     // reset Codec
     (Register::RESET, 0x00),
@@ -65,11 +65,11 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
 
     // configure power management
     //(Register::PWR, 0b0_0100_0000), // clkout power down
-    (Register::PWR, 0b0_0000_0000),   // master, so don't power down clock
+    (Register::PWR, 0b0_0000_0000),   // i2s_clock_internal, so don't power down clock
 
     // configure digital format
-    (Register::IFACE,  0b0_0100_1110), // MS=master, IWL=32bit, FORMAT=i2s
-    //(Register::IFACE,  0b0_0000_1110), // MS=slave, IWL=32bit, FORMAT=i2s
+    (Register::IFACE,  0b0_0100_1110), // MS=i2s_clock_internal, IWL=32bit, FORMAT=i2s
+    //(Register::IFACE,  0b0_0000_1110), // MS=i2s_clock_external, IWL=32bit, FORMAT=i2s
 
     // set samplerate
     (Register::SRATE, 0x00), // fs=48kHz
@@ -77,3 +77,4 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     (Register::ACTIVE, 0x00),
     (Register::ACTIVE, 0x01),
 ];
+*/

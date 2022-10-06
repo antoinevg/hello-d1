@@ -103,8 +103,10 @@ fn main() -> ! {
 /// DMA half-transfer interrupt handler for i2s data
 unsafe fn handle_dma_interrupt(half: bool) {
     // oscillator state
-    static mut OSC: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
-    static mut F: f32 = 0.;
+    static mut OSC1: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
+    static mut OSC2: osc::Wavetable = osc::Wavetable::new(osc::Shape::Saw);
+    static mut F1: f32 = 0.;
+    static mut F2: f32 = 0.;
 
     let half_buffer_length = TX_BUFFER.len() / 2;
     let skip = if half {
@@ -118,16 +120,18 @@ unsafe fn handle_dma_interrupt(half: bool) {
     while frame_index < half_buffer_length {
 
         // whoop! whoop!
-        F += 0.01;
-        if F >= 500. {
-            F = 0.;
+        //F1 += 0.01;
+        if F1 >= 500. {
+            F1 = 0.;
         }
-        OSC.dx = (1. / 48_000.) * (220. + F);
-        let sample = dsp::f32_to_u32(OSC.step());
+        OSC1.dx = (1. / 48_000.) * (220. + F1);
+        OSC2.dx = (1. / 48_000.) * (220. + F2);
+        let left  = dsp::f32_to_u32(OSC1.step());
+        let right = dsp::f32_to_u32(OSC2.step());
 
         let x = frame_index + skip;
-        TX_BUFFER[x + 0] = sample as u32;
-        TX_BUFFER[x + 1] = sample as u32;
+        TX_BUFFER[x + 0] = left as u32;
+        TX_BUFFER[x + 1] = right as u32;
 
         frame_index += 2;
     }

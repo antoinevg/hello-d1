@@ -66,7 +66,7 @@ fn init_i2s_pcm2_gpio(gpio: &GPIO) {
 
 /// Set up I2S clocks
 ///
-/// TODO do we still need to do this if the I2S clock is external?
+/// TODO Make pll_audio config optional for when codec has its own clock
 fn init_i2s_pcm2_ccu(ccu: &CCU) {
     // configure PLL_Audio0 frequency and enable PLL_Audio0
     ccu.pll_audio0_ctrl.write(|w| unsafe {
@@ -126,6 +126,11 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
          .rxen().disable()
     });
 
+    // set fifo to mode1 (little-endian)
+    i2s_pcm2.i2s_pcm_fctl.modify(|_, w| {
+        w.txim().mode1()
+    });
+
     // flush tx/rx fifo
     i2s_pcm2.i2s_pcm_fctl.modify(|_, w| {
         w.ftx().flush()
@@ -139,10 +144,10 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     // configure i2c_pcm2 mode: external clock, i2s mode
     i2s_pcm2.i2s_pcm_ctl.modify(|_, w| {
         w
-            .rx_sync_en_start().enable() // ? only takes effect if rx_sync_en is high
-            .rx_sync_en().enable()       // ?
-            .bclk_out().input()          // default is output, check with scope
-            .lrck_out().input()          // default is output, check with scope
+            .rx_sync_en_start().enable() // only takes effect if rx_sync_en is high
+            .rx_sync_en().enable()       // rx_sync: enable
+            .bclk_out().input()          // i2s_clock_external
+            .lrck_out().input()          // i2s_clock_external
             .dout0_en().enable()
             .out_mute().normal()
             .mode_sel().left()           // Offset 0: Left-Justified, Offset 1: I2S
@@ -158,27 +163,28 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     // configure i2c_pcm2 format:
     i2s_pcm2.i2s_pcm_fmt0.modify(|_, w| unsafe {
         w
-            .lrck_polarity().high()     // low: left, high: right - I2S_CHANNEL_FMT_RIGHT_LEFT ?
-            .lrck_period().bits(31)     // sampleres - 1 ?
-            .sr().bits_32()             // sample resolution: 32 bit
-            .sw().bits_32()             // slow width: ?
-            .blck_polarity().invert()   // normal: negative, invert: positive  ?
-            .edge_transfer().same()     // in conjunction with blck_polarity sets pos/neg edge  ?
+            .lrck_polarity().high()       // low: left, high: right - I2S_CHANNEL_FMT_RIGHT_LEFT
+            .lrck_period().bits(31)       // period = sr - 1
+            .sr().bits_32()               // sample resolution: 32 bit
+            .sw().bits_32()               // slot width: 32 bit
+            .blck_polarity().normal()     // normal: negative, invert: positive
+            .edge_transfer().alternate()  // in conjunction with blck_polarity sets pos/neg edge
 
     });
     i2s_pcm2.i2s_pcm_fmt1.modify(|_, w| {
         w
-            .rx_mls().msb()  // ?
-            .tx_mls().msb()  // ?
-            .sext().transfer0()   // if sampleres < slot width
+            .rx_mls().msb()    // i2s mode
+            .tx_mls().msb()    // i2s mode
+            .sext().zero()     // if sampleres < slot width
             .rx_pdm().linear() // linear PCM / u-law / A-law
             .tx_pdm().linear() // linear PCM / u-law / A-law
     });
-    /*i2s_pcm2.i2s_pcm_chcfg.modify(|_, w| {
-        // this is only needed for TDM I think
-        w.tx_slot_hiz().normal()  // defaults
-         .tx_state().zero()       // defaults
-    });*/
+    i2s_pcm2.i2s_pcm_chcfg.modify(|_, w| unsafe {
+        w.tx_slot_hiz().normal()  // defaults - only used for TDM
+         .tx_state().zero()       // defaults - only used for TDM
+         .tx_slot_num().bits(1)   // DMA/FIFO num slots = n + 1
+        //.rx_slot_num().bits(0) // TODO
+    });
     i2s_pcm2.i2s_pcm_tx0chsel.modify(|_, w| unsafe {
         w.offset().bits(1) // I2S: 1
          .chsel().bits(1)  // Num slots = n + 1
@@ -194,6 +200,8 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     i2s_pcm2.i2s_pcm_rxchmap0.modify(|_, w| {
         w
     });*/
+
+
 }
 
 /// Configure DMA

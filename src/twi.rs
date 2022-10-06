@@ -8,8 +8,8 @@ use pac::twi::twi_stat::STA_A as Status;
 
 use crate::println;
 
-const I2C_MASTER_WRITE: u8 = 0;
-const I2C_MASTER_READ: u8 = 1;
+const I2C_CONTROLLER_WRITE: u8 = 0;
+const I2C_CONTROLLER_READ: u8 = 1;
 
 /// Twi Peripheral
 pub struct Twi {
@@ -88,7 +88,7 @@ fn init_twi0(twi0: &TWI0, gpio: &GPIO, ccu: &CCU) {
 
     // 6. configure TWI control register
     twi0.twi_cntr.write(|w| {
-        w.bus_en().respond()  // bus enable: set to '1' for master operation
+        w.bus_en().respond()  // bus enable: set to '1' for operation as controller
          .int_en().low()      // interrupt: disabled
     });
 }
@@ -140,7 +140,7 @@ fn write_twi0(twi0: &TWI0, device_id: u8, address: Option<u8>, buffer: &[u8]) ->
     }
 
     // 2. write device id
-    let data = ((device_id & 0xff) << 1) | (I2C_MASTER_WRITE & 1);
+    let data = ((device_id & 0xff) << 1) | (I2C_CONTROLLER_WRITE & 1);
     twi0.twi_data.write(|w| unsafe { w.bits(data as u32) });
     clear_interrupt_twi0(twi0);
 
@@ -213,7 +213,7 @@ fn read_twi0(twi0: &TWI0, device_id: u8, address: u8, buffer: &mut [u8]) -> Resu
     }
 
     // 2. write device id
-    let data = ((device_id & 0xff) << 1) | (I2C_MASTER_WRITE & 1);
+    let data = ((device_id & 0xff) << 1) | (I2C_CONTROLLER_WRITE & 1);
     twi0.twi_data.write(|w| unsafe { w.bits(data as u32) });
     clear_interrupt_twi0(twi0);
 
@@ -250,7 +250,7 @@ fn read_twi0(twi0: &TWI0, device_id: u8, address: u8, buffer: &mut [u8]) -> Resu
     }
 
     // 4. write device id to start read operation
-    let data = ((device_id & 0xff) << 1) | (I2C_MASTER_READ & 1);
+    let data = ((device_id & 0xff) << 1) | (I2C_CONTROLLER_READ & 1);
     twi0.twi_data.write(|w| unsafe { w.bits(data as u32) });
     clear_interrupt_twi0(twi0);
 
