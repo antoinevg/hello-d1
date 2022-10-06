@@ -25,12 +25,6 @@ pub struct Dmac {
 impl Dmac {
     pub fn new(dmac: DMAC, ccu: &mut CCU) -> Self {
         ccu.dma_bgr.write(|w| w.gating().pass().rst().deassert());
-        // disable auto-gating, probably not needed?
-        /*dmac.dmac_auto_gate.write(
-            |w| w.dma_chan_circuit().set_bit()
-                .dma_common_circuit().set_bit()
-                .dma_mclk_circuit().set_bit()
-        );*/
         Self {
             dmac,
             channels: [

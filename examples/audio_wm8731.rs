@@ -11,8 +11,8 @@ use d1_pac as pac;
 use panic_halt as _;
 
 use hello_d1::twi;
-//use hello_d1::i2s;
-//use hello_d1::dmac;
+use hello_d1::i2s;
+use hello_d1::dmac;
 use hello_d1::logging;
 use hello_d1::plic;
 use hello_d1::println;
@@ -34,7 +34,7 @@ fn main() -> ! {
     gpio.pc_cfg0.write(|w| w.pc1_select().output());
 
     // ccu
-    let ccu = p.CCU;
+    let mut ccu = p.CCU;
 
     // configure wm8731 over i2c
     println!("configure wm8731");
@@ -61,32 +61,29 @@ fn main() -> ! {
         }
     }
 
-/*
     // i2s
-    let mut i2s = i2s::I2s::new(p.I2S_PCM2, &mut ccu);
+    let mut i2s = i2s::I2s::new(p.I2S_PCM2, &gpio, &ccu);
 
     // dmac
     let mut dmac = dmac::Dmac::new(p.DMAC, &mut ccu);
-*/
+
     // plic
-    /*let plic = plic::Plic::new(p.PLIC);
+    let plic = plic::Plic::new(p.PLIC);
     unsafe {
-        //plic.set_priority(pac::Interrupt::TWI0, plic::Priority::P1);
-        //plic.set_priority(pac::Interrupt::DMAC_NS, plic::Priority::P1);
-        //plic.set_priority(pac::Interrupt::I2S_PCM2, plic::Priority::P1);
-        //plic.unmask(pac::Interrupt::TWI0);
-        //plic.unmask(pac::Interrupt::DMAC_NS);
-        //plic.unmask(pac::Interrupt::I2S_PCM2);
-    }*/
+        plic.set_priority(pac::Interrupt::DMAC_NS, plic::Priority::P1);
+        plic.set_priority(pac::Interrupt::I2S_PCM2, plic::Priority::P1);
+        plic.unmask(pac::Interrupt::DMAC_NS);
+        plic.unmask(pac::Interrupt::I2S_PCM2);
+    }
 
     // enable interrupts
-    /*unsafe {
+    unsafe {
         riscv::interrupt::enable();
         riscv::register::mie::set_mext();
-    }*/
+    }
 
     // i2s - start
-    //i2s.start(&mut dmac, unsafe { &TX_BUFFER });
+    i2s.start(&mut dmac, unsafe { &TX_BUFFER });
 
     // blinky
     loop {
@@ -126,7 +123,7 @@ unsafe fn handle_dma_interrupt(half: bool) {
             F = 0.;
         }
         OSC.dx = (1. / 48_000.) * (220. + F);
-        let sample = dsp::f32_to_u20(OSC.step());
+        let sample = dsp::f32_to_u32(OSC.step());
 
         let x = frame_index + skip;
         TX_BUFFER[x + 0] = sample as u32;
@@ -144,32 +141,6 @@ extern "C" fn MachineExternal() {
     let claim = plic.claim();
 
     match claim {
-        pac::Interrupt::TWI0 => {
-            let twi0 = unsafe { &*pac::TWI0::PTR };
-
-            //println!("TIW0");
-
-            /*if twi0.twi_cntr.read().int_flag().bit_is_set() {
-                twi0.twi_cntr.modify(|_, w| {
-                    w.int_flag().clear_bit()
-                });
-                while twi0.twi_cntr.read().int_flag().bit_is_set() {
-                    println!(".");
-                }
-            }*/
-
-            /*twi0.twi_cntr.modify(|_, w| {
-                w.int_flag().clear_bit()
-            });*/
-
-            /*while twi0.twi_cntr.read().int_flag().bit_is_set() {
-                println!("..");
-            }*/
-
-            //let status = twi0.twi_stat.read().sta();
-            //println!("TWI0: {} {:?}", status.bits(), status.variant().unwrap());
-            //println!("TWI0: {:0x}", status.bits());
-        }
         pac::Interrupt::DMAC_NS => {
             let dmac = unsafe { &*pac::DMAC::PTR };
 
@@ -192,21 +163,26 @@ extern "C" fn MachineExternal() {
         }
         pac::Interrupt::I2S_PCM2 => {
             let i2s = unsafe { &*pac::I2S_PCM2::PTR };
-            /*
+
             // get pending interrupts
-            let pending = i2s.ac_dac_fifos.read();
+            let pending = i2s.i2s_pcm_ista.read();
 
             // clear all pending interrupts
+            if pending.txe_int().is_pending() { // TODO don't need this
+                println!("empty");
+                i2s.i2s_pcm_ista.write(|w| w.txe_int().set_bit());
+                while i2s.i2s_pcm_ista.read().txe_int().bit_is_set() {}
+            }
             if pending.txo_int().is_pending() {
                 println!("overrun");
-                i2s.ac_dac_fifos.write(|w| w.txo_int().set_bit());
-                while i2s.ac_dac_fifos.read().txo_int().bit_is_set() {}
+                i2s.i2s_pcm_ista.write(|w| w.txo_int().set_bit());
+                while i2s.i2s_pcm_ista.read().txo_int().bit_is_set() {}
             }
             if pending.txu_int().is_pending() {
                 println!("underrun");
-                i2s.ac_dac_fifos.write(|w| w.txu_int().set_bit());
-                while i2s.ac_dac_fifos.read().txu_int().bit_is_set() {}
-            }*/
+                i2s.i2s_pcm_ista.write(|w| w.txu_int().set_bit());
+                while i2s.i2s_pcm_ista.read().txu_int().bit_is_set() {}
+            }
         }
         x => {
             println!("Unexpected claim: {:?}", x);

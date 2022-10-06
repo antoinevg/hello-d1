@@ -26,3 +26,16 @@ pub fn f32_to_u20(x: f32) -> u32 {
     };
     (x as i32) as u32
 }
+
+#[inline(always)]
+pub fn f32_to_u32(x: f32) -> u32 {
+    let x = x * 2_147_483_647.;
+    let x = if x > 2_147_483_647. {
+        2_147_483_647.
+    } else if x < -2_147_483_648. {
+        -2_147_483_648.
+    } else {
+        x
+    };
+    (x as i32) as u32
+}
