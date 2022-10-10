@@ -18,6 +18,7 @@ use hello_d1::plic;
 use hello_d1::println;
 
 // Audio Buffer: 2 buffers * 2 channels * 32 samples = ~ 0.67 ms latency
+static mut RX_BUFFER: [u32; 2 * 2 * 32] = [0; 2 * 2 * 32];
 static mut TX_BUFFER: [u32; 2 * 2 * 32] = [0; 2 * 2 * 32];
 
 #[riscv_rt::entry]
@@ -83,7 +84,7 @@ fn main() -> ! {
     }
 
     // i2s - start
-    i2s.start(&mut dmac, unsafe { &TX_BUFFER });
+    i2s.start(&mut dmac, unsafe { &RX_BUFFER }, unsafe { &TX_BUFFER });
 
     // blinky
     loop {
@@ -115,7 +116,15 @@ unsafe fn handle_dma_interrupt(half: bool) {
         half_buffer_length
     };
 
-    // fill buffer
+    // read rx_buffer
+    let mut frame_index = 0;
+    while frame_index < half_buffer_length {
+        frame_index += 2;
+    }
+
+    // TODO callback
+
+    // fill tx_buffer
     let mut frame_index = 0;
     while frame_index < half_buffer_length {
 
@@ -135,6 +144,13 @@ unsafe fn handle_dma_interrupt(half: bool) {
 
         frame_index += 2;
     }
+
+    // debug
+    static mut COUNTER: usize = 0;
+    if COUNTER % 4800 == 0 {
+        println!("handle_dma_interrupt: {}", COUNTER);
+    }
+    COUNTER += 1;
 }
 
 #[export_name = "MachineExternal"]
@@ -151,7 +167,21 @@ extern "C" fn MachineExternal() {
             // get pending interrupts
             let pending = dmac.dmac_irq_pend0.read();
 
-            // clear all pending interrupts
+            // clear all pending interrupts for channel 1 - rx
+            if pending.dma1_hlaf_irq_pend().is_pending() {
+                dmac.dmac_irq_pend0
+                    .write(|w| w.dma1_hlaf_irq_pend().set_bit());
+                while dmac.dmac_irq_pend0.read().dma1_hlaf_irq_pend().bit_is_set() {}
+                //unsafe { handle_dma_interrupt(true) };
+            }
+            if pending.dma1_pkg_irq_pend().is_pending() {
+                dmac.dmac_irq_pend0
+                    .write(|w| w.dma1_pkg_irq_pend().set_bit());
+                while dmac.dmac_irq_pend0.read().dma1_pkg_irq_pend().bit_is_set() {}
+                //unsafe { handle_dma_interrupt(false) };
+            }
+
+            // clear all pending interrupts for channel 0 - tx
             if pending.dma0_hlaf_irq_pend().is_pending() {
                 dmac.dmac_irq_pend0
                     .write(|w| w.dma0_hlaf_irq_pend().set_bit());
@@ -164,6 +194,7 @@ extern "C" fn MachineExternal() {
                 while dmac.dmac_irq_pend0.read().dma0_pkg_irq_pend().bit_is_set() {}
                 unsafe { handle_dma_interrupt(false) };
             }
+
         }
         pac::Interrupt::I2S_PCM2 => {
             let i2s = unsafe { &*pac::I2S_PCM2::PTR };
@@ -171,19 +202,36 @@ extern "C" fn MachineExternal() {
             // get pending interrupts
             let pending = i2s.i2s_pcm_ista.read();
 
-            // clear all pending interrupts
+            // clear all pending rx interrupts
+            if pending.rxa_int().is_pending() { // TODO don't need this
+                println!("rx available");
+                i2s.i2s_pcm_ista.write(|w| w.rxa_int().set_bit());
+                while i2s.i2s_pcm_ista.read().rxa_int().bit_is_set() {}
+            }
+            if pending.rxo_int().is_pending() {
+                println!("rx overrun");
+                i2s.i2s_pcm_ista.write(|w| w.rxo_int().set_bit());
+                while i2s.i2s_pcm_ista.read().rxo_int().bit_is_set() {}
+            }
+            if pending.rxu_int().is_pending() {
+                println!("rx underrun");
+                i2s.i2s_pcm_ista.write(|w| w.rxu_int().set_bit());
+                while i2s.i2s_pcm_ista.read().rxu_int().bit_is_set() {}
+            }
+
+            // clear all pending tx interrupts
             if pending.txe_int().is_pending() { // TODO don't need this
-                println!("empty");
+                println!("tx empty");
                 i2s.i2s_pcm_ista.write(|w| w.txe_int().set_bit());
                 while i2s.i2s_pcm_ista.read().txe_int().bit_is_set() {}
             }
             if pending.txo_int().is_pending() {
-                println!("overrun");
+                println!("tx overrun");
                 i2s.i2s_pcm_ista.write(|w| w.txo_int().set_bit());
                 while i2s.i2s_pcm_ista.read().txo_int().bit_is_set() {}
             }
             if pending.txu_int().is_pending() {
-                println!("underrun");
+                println!("tx underrun");
                 i2s.i2s_pcm_ista.write(|w| w.txu_int().set_bit());
                 while i2s.i2s_pcm_ista.read().txu_int().bit_is_set() {}
             }

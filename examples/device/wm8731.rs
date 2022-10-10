@@ -30,7 +30,10 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     (Register::PWR,    0b0001_0000),   // power-down outputs
 
     // select mic for adc input, dac select
-    (Register::APANA,  0b0_0001_0100),
+    //(Register::APANA,  0b0_0001_0100),
+
+    // select line for adc input, dac select
+    (Register::APANA,  0b0_0001_0000),
 
     // configure digital routing
     (Register::APDIGI, 0b1_0110),      // store dc-offset, de-emphasis for fs=48kHz, enable hpf

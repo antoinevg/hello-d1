@@ -30,12 +30,12 @@ impl I2s {
     }
 
     /// Start `I2s`
-    pub fn start(&mut self, dmac: &mut Dmac, tx_buffer: &[u32]) {
+    pub fn start(&mut self, dmac: &mut Dmac, rx_buffer: &[u32], tx_buffer: &[u32]) {
         // configure dma and dma request
-        let descriptor = configure_dma(&self.i2s_pcm2, dmac, tx_buffer);
+        let descriptors = configure_dma(&self.i2s_pcm2, dmac, rx_buffer, tx_buffer);
 
         // enable peripheral drq and dma
-        enable_drq_dma(&self.i2s_pcm2, dmac, descriptor);
+        enable_drq_dma(&self.i2s_pcm2, dmac, descriptors);
     }
 
     /// Obtain a static `I2s` instance for use in
@@ -126,18 +126,19 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
          .rxen().disable()
     });
 
-    // set fifo to mode1 (little-endian)
+    // set rx/tx fifo to mode1 (little-endian)
     i2s_pcm2.i2s_pcm_fctl.modify(|_, w| {
         w.txim().mode1()
+         .rxom().mode1()
     });
 
-    // flush tx/rx fifo
+    // flush rx/tx fifo
     i2s_pcm2.i2s_pcm_fctl.modify(|_, w| {
         w.ftx().flush()
          .frx().flush()
     });
 
-    // clear tx/rx fifo counters
+    // clear rx/tx fifo counters
     i2s_pcm2.i2s_pcm_txcnt.write(|w| unsafe { w.tx_cnt().bits(0) });
     i2s_pcm2.i2s_pcm_rxcnt.write(|w| unsafe { w.rx_cnt().bits(0) });
 
@@ -183,7 +184,7 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
         w.tx_slot_hiz().normal()  // defaults - only used for TDM
          .tx_state().zero()       // defaults - only used for TDM
          .tx_slot_num().bits(1)   // DMA/FIFO num slots = n + 1
-        //.rx_slot_num().bits(0) // TODO
+         .rx_slot_num().bits(1)
     });
     i2s_pcm2.i2s_pcm_tx0chsel.modify(|_, w| unsafe {
         w.offset().bits(1) // I2S: 1
@@ -194,14 +195,16 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
         w.ch0_map().bits(0)
          .ch1_map().bits(1)
     });
-    /*i2s_pcm2.i2s_pcm_rxchsel.modify(|_, w| {
-        w
+    i2s_pcm2.i2s_pcm_rxchsel.modify(|_, w| unsafe {
+        w.offset().bits(1) // I2S: 1
+         .chsel().bits(1)  // Num slots = n + 1
     });
-    i2s_pcm2.i2s_pcm_rxchmap0.modify(|_, w| {
-        w
-    });*/
-
-
+    i2s_pcm2.i2s_pcm_rxchmap3.modify(|_, w| unsafe{
+        w.ch0_select().sdi0()  // ?
+         .ch1_select().sdi0()  // ?
+         .ch0_map().bits(0)    // ?
+         .ch1_map().bits(1)    // ?
+    });
 }
 
 /// Configure DMA
@@ -210,10 +213,38 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
 fn configure_dma(
     i2s_pcm2: &I2S_PCM2,
     dmac: &mut Dmac,
+    rx_buffer: &[u32],
     tx_buffer: &[u32],
-) -> descriptor::Descriptor {
-    // create dma descriptor
-    let descriptor_config = descriptor::DescriptorConfig {
+) -> (descriptor::Descriptor, descriptor::Descriptor) {
+    // create rx dma descriptor
+    let rx_descriptor_config = descriptor::DescriptorConfig {
+        // source
+        source: rx_buffer.as_ptr().cast(),
+        byte_counter: rx_buffer.len() * core::mem::size_of::<u32>(),
+        src_data_width: descriptor::DataWidth::Bit32,
+        src_addr_mode: descriptor::AddressMode::IoMode,
+        src_block_size: descriptor::BlockSize::Byte4,
+        src_drq_type: descriptor::SrcDrqType::I2sPcm2Rx,
+        // destination
+        destination: i2s_pcm2.i2s_pcm_rxfifo.as_ptr().cast(),
+        dest_width: descriptor::DataWidth::Bit32,
+        dest_addr_mode: descriptor::AddressMode::LinearMode,
+        dest_block_size: descriptor::BlockSize::Byte4,
+        dest_drq_type: descriptor::DestDrqType::Dram,
+        // config
+        link: None,
+        wait_clock_cycles: 0,
+        bmode: descriptor::BModeSel::Normal,
+    };
+    let mut rx_descriptor: Descriptor = rx_descriptor_config.try_into().unwrap();
+
+    // link rx descriptor to itself
+    let rx_descriptor_ptr = &rx_descriptor as *const Descriptor as *const ();
+    rx_descriptor.link = rx_descriptor_ptr as u32;
+    rx_descriptor.link |= ((rx_descriptor_ptr as usize >> 32) as u32) & 0b11;
+
+    // create tx dma descriptor
+    let tx_descriptor_config = descriptor::DescriptorConfig {
         // source
         source: tx_buffer.as_ptr().cast(),
         byte_counter: tx_buffer.len() * core::mem::size_of::<u32>(),
@@ -232,43 +263,56 @@ fn configure_dma(
         wait_clock_cycles: 0,
         bmode: descriptor::BModeSel::Normal,
     };
-    let mut descriptor: Descriptor = descriptor_config.try_into().unwrap();
+    let mut tx_descriptor: Descriptor = tx_descriptor_config.try_into().unwrap();
 
-    // link descriptor to itself
-    let descriptor_ptr = &descriptor as *const Descriptor as *const ();
-    descriptor.link = descriptor_ptr as u32;
-    descriptor.link |= ((descriptor_ptr as usize >> 32) as u32) & 0b11;
+    // link tx descriptor to itself
+    let tx_descriptor_ptr = &tx_descriptor as *const Descriptor as *const ();
+    tx_descriptor.link = tx_descriptor_ptr as u32;
+    tx_descriptor.link |= ((tx_descriptor_ptr as usize >> 32) as u32) & 0b11;
 
-    descriptor
+    (rx_descriptor, tx_descriptor)
 }
 
-fn enable_drq_dma(i2s_pcm2: &I2S_PCM2, dmac: &mut Dmac, descriptor: descriptor::Descriptor) {
+fn enable_drq_dma(i2s_pcm2: &I2S_PCM2, dmac: &mut Dmac, descriptors: (descriptor::Descriptor, descriptor::Descriptor)) {
+    let (rx_descriptor, tx_descriptor) = descriptors;
     unsafe {
         // enable dma half/package interrupts
         dmac.irq_en0().write(|w| {
-            w.dma0_hlaf_irq_en().set_bit()
-             .dma0_pkg_irq_en().set_bit()
+            w.dma0_hlaf_irq_en().set_bit()  // disable these ?
+             .dma0_pkg_irq_en().set_bit()   // disable these ?
+             .dma1_hlaf_irq_en().set_bit()
+             .dma1_pkg_irq_en().set_bit()
         });
 
+        // TODO switch these around
         dmac.channels[0]
             .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
-        dmac.channels[0].start_descriptor(NonNull::from(&descriptor));
+        dmac.channels[0].start_descriptor(NonNull::from(&tx_descriptor));
+        dmac.channels[1]
+            .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
+        dmac.channels[1].start_descriptor(NonNull::from(&rx_descriptor));
     }
 
     // FIFO clear pending interrupts
     i2s_pcm2.i2s_pcm_ista.write(|w| {
-        w.txu_int().set_bit()
+        w.txe_int().set_bit() // TODO don't need this
          .txo_int().set_bit()
-         .txe_int().set_bit() // TODO don't need this
+         .txu_int().set_bit()
+         .rxa_int().set_bit() // TODO don't need this
+         .rxo_int().set_bit()
+         .rxu_int().set_bit()
     });
 
     // enable i2s_pcm2 interrupts
     i2s_pcm2.i2s_pcm_int.write(|w| {
         w.tx_drq().enable()
-         .txui_en().enable()
-         .txoi_en().enable()
          .txei_en().enable() // TODO don't need this
-         // TODO rx_drq etc.
+         .txoi_en().enable()
+         .txui_en().enable()
+         .rx_drq().enable()
+         .rxai_en().enable() // TODO don't need this
+         .rxoi_en().enable()
+         .rxui_en().enable()
     });
 
     // enable i2c_pcm2
