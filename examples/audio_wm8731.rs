@@ -84,7 +84,7 @@ fn main() -> ! {
     }
 
     // i2s - start
-    i2s.start(&mut dmac, unsafe { &RX_BUFFER }, unsafe { &TX_BUFFER });
+    i2s.start(&mut dmac, unsafe { &mut RX_BUFFER }, unsafe { &TX_BUFFER });
 
     // blinky
     loop {
@@ -105,7 +105,7 @@ fn main() -> ! {
 unsafe fn handle_dma_interrupt(half: bool) {
     // oscillator state
     static mut OSC1: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
-    static mut OSC2: osc::Wavetable = osc::Wavetable::new(osc::Shape::Saw);
+    static mut OSC2: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
     static mut F1: f32 = 0.;
     static mut F2: f32 = 0.;
 
@@ -134,7 +134,7 @@ unsafe fn handle_dma_interrupt(half: bool) {
             F1 = 0.;
         }
         OSC1.dx = (1. / 48_000.) * (220. + F1);
-        OSC2.dx = (1. / 48_000.) * (220. + F2);
+        OSC2.dx = (1. / 48_000.) * (440. + F2);
         let left  = dsp::f32_to_u32(OSC1.step());
         let right = dsp::f32_to_u32(OSC2.step());
 

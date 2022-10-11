@@ -12,6 +12,8 @@ use crate::println;
 /// I2s Peripheral
 pub struct I2s {
     i2s_pcm2: I2S_PCM2,
+    rx_descriptor: Option<Descriptor>,
+    tx_descriptor: Option<Descriptor>,
 }
 
 impl I2s {
@@ -26,16 +28,24 @@ impl I2s {
         // configure sample rate, data transfer
         configure_i2s_pcm2(&i2s_pcm2);
 
-        Self { i2s_pcm2 }
+        Self {
+            i2s_pcm2,
+            rx_descriptor: None,
+            tx_descriptor: None,
+        }
     }
 
     /// Start `I2s`
-    pub fn start(&mut self, dmac: &mut Dmac, rx_buffer: &[u32], tx_buffer: &[u32]) {
+    pub fn start(&mut self, dmac: &mut Dmac, rx_buffer: &mut [u32], tx_buffer: &[u32]) {
         // configure dma and dma request
         let descriptors = configure_dma(&self.i2s_pcm2, dmac, rx_buffer, tx_buffer);
 
         // enable peripheral drq and dma
-        enable_drq_dma(&self.i2s_pcm2, dmac, descriptors);
+        let (rx_descriptor, tx_descriptor) = descriptors;
+        enable_drq_dma(&self.i2s_pcm2, dmac, (&rx_descriptor, &tx_descriptor));
+
+        self.rx_descriptor = Some(rx_descriptor);
+        self.tx_descriptor = Some(tx_descriptor);
     }
 
     /// Obtain a static `I2s` instance for use in
@@ -47,6 +57,8 @@ impl I2s {
     pub unsafe fn summon() -> Self {
         Self {
             i2s_pcm2: d1_pac::Peripherals::steal().I2S_PCM2,
+            rx_descriptor: None,
+            tx_descriptor: None,
         }
     }
 }
@@ -145,8 +157,8 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     // configure i2c_pcm2 mode: external clock, i2s mode
     i2s_pcm2.i2s_pcm_ctl.modify(|_, w| {
         w
-            .rx_sync_en_start().enable() // only takes effect if rx_sync_en is high
-            .rx_sync_en().enable()       // rx_sync: enable
+            .rx_sync_en().disable()       // rx_sync: enable
+            .rx_sync_en_start().disable() // only takes effect if rx_sync_en is high
             .bclk_out().input()          // i2s_clock_external
             .lrck_out().input()          // i2s_clock_external
             .dout0_en().enable()
@@ -164,12 +176,12 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     // configure i2c_pcm2 format:
     i2s_pcm2.i2s_pcm_fmt0.modify(|_, w| unsafe {
         w
-            .lrck_polarity().high()       // low: left, high: right - I2S_CHANNEL_FMT_RIGHT_LEFT
+            .lrck_polarity().low()       // low: left, high: right - I2S_CHANNEL_FMT_RIGHT_LEFT ???
             .lrck_period().bits(31)       // period = sr - 1
             .sr().bits_32()               // sample resolution: 32 bit
             .sw().bits_32()               // slot width: 32 bit
             .blck_polarity().normal()     // normal: negative, invert: positive
-            .edge_transfer().alternate()  // in conjunction with blck_polarity sets pos/neg edge
+            .edge_transfer().same()  // in conjunction with blck_polarity sets pos/neg edge ???
 
     });
     i2s_pcm2.i2s_pcm_fmt1.modify(|_, w| {
@@ -213,25 +225,25 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
 fn configure_dma(
     i2s_pcm2: &I2S_PCM2,
     dmac: &mut Dmac,
-    rx_buffer: &[u32],
+    rx_buffer: &mut [u32],
     tx_buffer: &[u32],
 ) -> (descriptor::Descriptor, descriptor::Descriptor) {
     // create rx dma descriptor
     let rx_descriptor_config = descriptor::DescriptorConfig {
         // source
-        source: rx_buffer.as_ptr().cast(),
-        byte_counter: rx_buffer.len() * core::mem::size_of::<u32>(),
+        source: i2s_pcm2.i2s_pcm_rxfifo.as_ptr().cast(),
         src_data_width: descriptor::DataWidth::Bit32,
         src_addr_mode: descriptor::AddressMode::IoMode,
         src_block_size: descriptor::BlockSize::Byte4,
         src_drq_type: descriptor::SrcDrqType::I2sPcm2Rx,
         // destination
-        destination: i2s_pcm2.i2s_pcm_rxfifo.as_ptr().cast(),
+        destination: rx_buffer.as_mut_ptr().cast(),
         dest_width: descriptor::DataWidth::Bit32,
         dest_addr_mode: descriptor::AddressMode::LinearMode,
         dest_block_size: descriptor::BlockSize::Byte4,
         dest_drq_type: descriptor::DestDrqType::Dram,
         // config
+        byte_counter: rx_buffer.len() * core::mem::size_of::<u32>(),
         link: None,
         wait_clock_cycles: 0,
         bmode: descriptor::BModeSel::Normal,
@@ -239,7 +251,7 @@ fn configure_dma(
     let mut rx_descriptor: Descriptor = rx_descriptor_config.try_into().unwrap();
 
     // link rx descriptor to itself
-    let rx_descriptor_ptr = &rx_descriptor as *const Descriptor as *const ();
+    let rx_descriptor_ptr = &rx_descriptor as *const _;
     rx_descriptor.link = rx_descriptor_ptr as u32;
     rx_descriptor.link |= ((rx_descriptor_ptr as usize >> 32) as u32) & 0b11;
 
@@ -247,7 +259,6 @@ fn configure_dma(
     let tx_descriptor_config = descriptor::DescriptorConfig {
         // source
         source: tx_buffer.as_ptr().cast(),
-        byte_counter: tx_buffer.len() * core::mem::size_of::<u32>(),
         src_data_width: descriptor::DataWidth::Bit32,
         src_addr_mode: descriptor::AddressMode::LinearMode,
         src_block_size: descriptor::BlockSize::Byte4,
@@ -259,6 +270,7 @@ fn configure_dma(
         dest_block_size: descriptor::BlockSize::Byte4,
         dest_drq_type: descriptor::DestDrqType::I2sPcm2Tx,
         // config
+        byte_counter: tx_buffer.len() * core::mem::size_of::<u32>(),
         link: None,
         wait_clock_cycles: 0,
         bmode: descriptor::BModeSel::Normal,
@@ -266,14 +278,15 @@ fn configure_dma(
     let mut tx_descriptor: Descriptor = tx_descriptor_config.try_into().unwrap();
 
     // link tx descriptor to itself
-    let tx_descriptor_ptr = &tx_descriptor as *const Descriptor as *const ();
+    //let tx_descriptor_ptr = &tx_descriptor as *const Descriptor as *const ();
+    let tx_descriptor_ptr = &tx_descriptor as *const _;
     tx_descriptor.link = tx_descriptor_ptr as u32;
     tx_descriptor.link |= ((tx_descriptor_ptr as usize >> 32) as u32) & 0b11;
 
     (rx_descriptor, tx_descriptor)
 }
 
-fn enable_drq_dma(i2s_pcm2: &I2S_PCM2, dmac: &mut Dmac, descriptors: (descriptor::Descriptor, descriptor::Descriptor)) {
+fn enable_drq_dma(i2s_pcm2: &I2S_PCM2, dmac: &mut Dmac, descriptors: (&descriptor::Descriptor, &descriptor::Descriptor)) {
     let (rx_descriptor, tx_descriptor) = descriptors;
     unsafe {
         // enable dma half/package interrupts
@@ -287,10 +300,10 @@ fn enable_drq_dma(i2s_pcm2: &I2S_PCM2, dmac: &mut Dmac, descriptors: (descriptor
         // TODO switch these around
         dmac.channels[0]
             .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
-        dmac.channels[0].start_descriptor(NonNull::from(&tx_descriptor));
+        dmac.channels[0].start_descriptor(NonNull::from(tx_descriptor));
         dmac.channels[1]
             .set_channel_modes(dmac::ChannelMode::Wait, dmac::ChannelMode::Wait);
-        dmac.channels[1].start_descriptor(NonNull::from(&rx_descriptor));
+        dmac.channels[1].start_descriptor(NonNull::from(rx_descriptor));
     }
 
     // FIFO clear pending interrupts
@@ -323,5 +336,4 @@ fn enable_drq_dma(i2s_pcm2: &I2S_PCM2, dmac: &mut Dmac, descriptors: (descriptor
     i2s_pcm2.i2s_pcm_ctl.modify(|_, w| {
         w.gen().enable()
     });
-
 }

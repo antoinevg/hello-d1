@@ -13,6 +13,15 @@ riscv-rt = { git = "https://github.com/rust-embedded/riscv-rt" }
 d1-pac = { path = "../upstream/aw-pac.git/d1-pac" }
 panic-halt = "=0.2.0"
 
+[profile.dev]
+opt-level = 2            # anything lower than 2 does not work
+debug-assertions = true  # obviously we have a problem
+overflow-checks = true   # obviously we have a problem
+codegen-units = 1
+incremental = false
+debug = true
+lto = true               # false crashes ??
+
 [profile.release]
 codegen-units = 1
 incremental = false
