@@ -176,12 +176,12 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     // configure i2c_pcm2 format:
     i2s_pcm2.i2s_pcm_fmt0.modify(|_, w| unsafe {
         w
-            .lrck_polarity().low()       // low: left, high: right - I2S_CHANNEL_FMT_RIGHT_LEFT ???
+            .lrck_polarity().high()       // low: left, high: right - I2S_CHANNEL_FMT_RIGHT_LEFT ??? check codec iface register
             .lrck_period().bits(31)       // period = sr - 1
-            .sr().bits_32()               // sample resolution: 32 bit
+            .sr().bits_24()               // sample resolution: 32 bit
             .sw().bits_32()               // slot width: 32 bit
             .blck_polarity().normal()     // normal: negative, invert: positive
-            .edge_transfer().same()  // in conjunction with blck_polarity sets pos/neg edge ???
+            .edge_transfer().alternate()  // in conjunction with blck_polarity sets pos/neg edge ???
 
     });
     i2s_pcm2.i2s_pcm_fmt1.modify(|_, w| {
@@ -288,11 +288,23 @@ fn configure_dma(
 
 fn enable_drq_dma(i2s_pcm2: &I2S_PCM2, dmac: &mut Dmac, descriptors: (&descriptor::Descriptor, &descriptor::Descriptor)) {
     let (rx_descriptor, tx_descriptor) = descriptors;
+
+    // DMA clear pending interrupts
+    let dmac_ptr = unsafe { &*pac::DMAC::PTR };
+    dmac_ptr.dmac_irq_pend0.write(|w| {
+        w.dma0_pkg_irq_pend().set_bit()
+         .dma0_hlaf_irq_pend().set_bit()
+         .dma0_queue_irq_pend().set_bit()
+         .dma1_pkg_irq_pend().set_bit()
+         .dma1_hlaf_irq_pend().set_bit()
+         .dma1_queue_irq_pend().set_bit()
+    });
+
     unsafe {
         // enable dma half/package interrupts
         dmac.irq_en0().write(|w| {
-            w.dma0_hlaf_irq_en().set_bit()  // disable these ?
-             .dma0_pkg_irq_en().set_bit()   // disable these ?
+            w//.dma0_hlaf_irq_en().set_bit()  // disable these ?
+             //.dma0_pkg_irq_en().set_bit()   // disable these ?
              .dma1_hlaf_irq_en().set_bit()
              .dma1_pkg_irq_en().set_bit()
         });

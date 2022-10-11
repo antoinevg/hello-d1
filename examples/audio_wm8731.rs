@@ -57,8 +57,9 @@ fn main() -> ! {
                 break;
             }
         }
+        //println!("{:02x}", register);
         unsafe {
-            riscv::asm::delay(50_000);
+            riscv::asm::delay(50_000_000);
         }
     }
 
@@ -102,7 +103,7 @@ fn main() -> ! {
 }
 
 /// DMA half-transfer interrupt handler for i2s data
-unsafe fn handle_dma_interrupt(half: bool) {
+unsafe fn handle_dma_interrupt(half: bool, is_tx: bool) {
     // oscillator state
     static mut OSC1: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
     static mut OSC2: osc::Wavetable = osc::Wavetable::new(osc::Shape::Sin);
@@ -111,23 +112,24 @@ unsafe fn handle_dma_interrupt(half: bool) {
 
     let half_buffer_length = TX_BUFFER.len() / 2;
     let skip = if half {
-        0
+        (0, half_buffer_length)
     } else {
-        half_buffer_length
+        (half_buffer_length, 0)
     };
 
-    // read rx_buffer
+    // loopback
     let mut frame_index = 0;
     while frame_index < half_buffer_length {
+        let tx = frame_index + skip.0;
+        let rx = frame_index + skip.1;
+        TX_BUFFER[tx + 0] = RX_BUFFER[rx + 0];
+        TX_BUFFER[tx + 1] = RX_BUFFER[rx + 1];
         frame_index += 2;
     }
-
-    // TODO callback
 
     // fill tx_buffer
     let mut frame_index = 0;
     while frame_index < half_buffer_length {
-
         // whoop! whoop!
         //F1 += 0.01;
         if F1 >= 500. {
@@ -135,13 +137,11 @@ unsafe fn handle_dma_interrupt(half: bool) {
         }
         OSC1.dx = (1. / 48_000.) * (220. + F1);
         OSC2.dx = (1. / 48_000.) * (440. + F2);
-        let left  = dsp::f32_to_u32(OSC1.step());
-        let right = dsp::f32_to_u32(OSC2.step());
-
-        let x = frame_index + skip;
-        TX_BUFFER[x + 0] = left as u32;
-        TX_BUFFER[x + 1] = right as u32;
-
+        let left  = dsp::f32_to_u24(OSC1.step());
+        let right = dsp::f32_to_u24(OSC2.step());
+        let tx = frame_index + skip.0;
+        TX_BUFFER[tx + 0] = left as u32;
+        //TX_BUFFER[tx + 1] = right as u32;
         frame_index += 2;
     }
 
@@ -169,31 +169,27 @@ extern "C" fn MachineExternal() {
 
             // clear all pending interrupts for channel 1 - rx
             if pending.dma1_hlaf_irq_pend().is_pending() {
-                dmac.dmac_irq_pend0
-                    .write(|w| w.dma1_hlaf_irq_pend().set_bit());
+                dmac.dmac_irq_pend0.write(|w| w.dma1_hlaf_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma1_hlaf_irq_pend().bit_is_set() {}
-                //unsafe { handle_dma_interrupt(true) };
+                unsafe { handle_dma_interrupt(false, false) };
             }
             if pending.dma1_pkg_irq_pend().is_pending() {
-                dmac.dmac_irq_pend0
-                    .write(|w| w.dma1_pkg_irq_pend().set_bit());
+                dmac.dmac_irq_pend0.write(|w| w.dma1_pkg_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma1_pkg_irq_pend().bit_is_set() {}
-                //unsafe { handle_dma_interrupt(false) };
+                unsafe { handle_dma_interrupt(true, false) };
             }
 
             // clear all pending interrupts for channel 0 - tx
-            if pending.dma0_hlaf_irq_pend().is_pending() {
-                dmac.dmac_irq_pend0
-                    .write(|w| w.dma0_hlaf_irq_pend().set_bit());
+            /*if pending.dma0_hlaf_irq_pend().is_pending() {
+                dmac.dmac_irq_pend0.write(|w| w.dma0_hlaf_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_hlaf_irq_pend().bit_is_set() {}
-                unsafe { handle_dma_interrupt(true) };
+                //unsafe { handle_dma_interrupt(true, true) };
             }
             if pending.dma0_pkg_irq_pend().is_pending() {
-                dmac.dmac_irq_pend0
-                    .write(|w| w.dma0_pkg_irq_pend().set_bit());
+                dmac.dmac_irq_pend0.write(|w| w.dma0_pkg_irq_pend().set_bit());
                 while dmac.dmac_irq_pend0.read().dma0_pkg_irq_pend().bit_is_set() {}
-                unsafe { handle_dma_interrupt(false) };
-            }
+                //unsafe { handle_dma_interrupt(false, true) };
+            }*/
 
         }
         pac::Interrupt::I2S_PCM2 => {
@@ -204,7 +200,7 @@ extern "C" fn MachineExternal() {
 
             // clear all pending rx interrupts
             if pending.rxa_int().is_pending() { // TODO don't need this
-                println!("rx available");
+                //println!("rx available");
                 i2s.i2s_pcm_ista.write(|w| w.rxa_int().set_bit());
                 while i2s.i2s_pcm_ista.read().rxa_int().bit_is_set() {}
             }
@@ -221,7 +217,7 @@ extern "C" fn MachineExternal() {
 
             // clear all pending tx interrupts
             if pending.txe_int().is_pending() { // TODO don't need this
-                println!("tx empty");
+                //println!("tx empty");
                 i2s.i2s_pcm_ista.write(|w| w.txe_int().set_bit());
                 while i2s.i2s_pcm_ista.read().txe_int().bit_is_set() {}
             }
