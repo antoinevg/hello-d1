@@ -20,39 +20,6 @@ pub enum Register {
     RESET  = 0x0F,
 }
 
-/*pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
-    // power-on codec
-    (Register::PWR,    0b0000_0000),
-
-    // configure analog routing
-    //(Register::APANA,  0b0001_0010),   // select line for adc input, dac select, mute mic
-    (Register::APANA,  0b0001_0101),   // select mic for adc input, mic boost
-
-    // configure digital routing
-    //(Register::APDIGI, 0b0_0000),        // default
-    (Register::APDIGI, 0b1_0110),        // store dc-offset, de-emphasis for fs=48kHz, enable hpf
-
-    // configure interface format
-    //(Register::IFACE,  0b0100_1110),     // i2s_clock_internal, 32bit, i2s
-    (Register::IFACE,  0b0100_1010),     // i2s_clock_internal, 24bit, i2s
-    //(Register::IFACE,  0b0100_0010),     // i2s_clock_internal, 16bit, i2s
-
-    // configure mode and sample-rate
-    (Register::SRATE,  0b00_0000),       // mode=0, fs=48kHz
-
-    // switch codec to active
-    (Register::ACTIVE, 0b1),
-
-    // set input level
-    (Register::LINVOL, 0b0_0001_0111),   // 0dB
-    (Register::RINVOL, 0b0_0001_0111),   // 0dB
-
-    // set output level
-    (Register::LHPOUT, 0b0_1111_1001),   // 0dB
-    (Register::RHPOUT, 0b0_1111_1001),   // 0dB
-];*/
-
-
 pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     // power-on codec
     (Register::PWR,    0b0000_0000),
@@ -60,7 +27,7 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     // reset codec
     (Register::RESET,  0x0),
 
-    // switch to inactive
+    // switch codec to inactive
     (Register::ACTIVE, 0b0),
 
     // configure power
@@ -75,8 +42,8 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     (Register::APDIGI, 0b0_0000),        // default
 
     // configure interface format
-    (Register::IFACE,  0b0100_1110),     // i2s_clock_internal, 32bit, i2s
-    //(Register::IFACE,  0b0100_1010),     // i2s_clock_internal, 24bit, i2s
+    //(Register::IFACE,  0b0100_1110),     // i2s_clock_internal, 32bit, i2s
+    (Register::IFACE,  0b0100_1010),     // i2s_clock_internal, 24bit, i2s
     //(Register::IFACE,  0b0100_0010),     // i2s_clock_internal, 16bit, i2s
 
     // configure mode and sample-rate
@@ -89,6 +56,9 @@ pub const DEFAULT_CONFIG: &[(Register, u16)] = &[
     // set output level
     (Register::LHPOUT, 0b0_1111_1001),   // 0dB
     (Register::RHPOUT, 0b0_1111_1001),   // 0dB
+
+    // switch codec to inactive
+    (Register::ACTIVE, 0b0),
 
     // switch codec to active
     (Register::ACTIVE, 0b1),

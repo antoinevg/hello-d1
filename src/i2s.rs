@@ -157,8 +157,8 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     // configure i2c_pcm2 mode: external clock, i2s mode
     i2s_pcm2.i2s_pcm_ctl.modify(|_, w| {
         w
-            .rx_sync_en().disable()       // rx_sync: enable
-            .rx_sync_en_start().disable() // only takes effect if rx_sync_en is high
+            .rx_sync_en().enable()       // rx_sync: enable
+            .rx_sync_en_start().enable() // only takes effect if rx_sync_en is high
             .bclk_out().input()          // i2s_clock_external
             .lrck_out().input()          // i2s_clock_external
             .dout0_en().enable()
@@ -177,9 +177,9 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
     i2s_pcm2.i2s_pcm_fmt0.modify(|_, w| unsafe {
         w
             .lrck_polarity().high()       // low: left, high: right - I2S_CHANNEL_FMT_RIGHT_LEFT ??? check codec iface register
-            .lrck_period().bits(31)       // period = sr - 1
-            .sr().bits_24()               // sample resolution: 32 bit
-            .sw().bits_32()               // slot width: 32 bit
+            .lrck_period().bits(31)       // period = width - 1
+            .sr().bits_24()               // sample resolution: 24 bit
+            .sw().bits_24()               // slot width: 24 bit
             .blck_polarity().normal()     // normal: negative, invert: positive
             .edge_transfer().alternate()  // in conjunction with blck_polarity sets pos/neg edge ???
 
@@ -193,9 +193,7 @@ fn configure_i2s_pcm2(i2s_pcm2: &I2S_PCM2) {
             .tx_pdm().linear() // linear PCM / u-law / A-law
     });
     i2s_pcm2.i2s_pcm_chcfg.modify(|_, w| unsafe {
-        w.tx_slot_hiz().normal()  // defaults - only used for TDM
-         .tx_state().zero()       // defaults - only used for TDM
-         .tx_slot_num().bits(1)   // DMA/FIFO num slots = n + 1
+        w.tx_slot_num().bits(1)   // DMA/FIFO num slots = n + 1
          .rx_slot_num().bits(1)
     });
     i2s_pcm2.i2s_pcm_tx0chsel.modify(|_, w| unsafe {

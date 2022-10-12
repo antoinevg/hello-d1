@@ -57,9 +57,8 @@ fn main() -> ! {
                 break;
             }
         }
-        //println!("{:02x}", register);
         unsafe {
-            riscv::asm::delay(50_000_000);
+            riscv::asm::delay(5_000_000);
         }
     }
 
@@ -128,7 +127,7 @@ unsafe fn handle_dma_interrupt(half: bool, is_tx: bool) {
     }
 
     // fill tx_buffer
-    let mut frame_index = 0;
+    /*let mut frame_index = 0;
     while frame_index < half_buffer_length {
         // whoop! whoop!
         //F1 += 0.01;
@@ -141,9 +140,9 @@ unsafe fn handle_dma_interrupt(half: bool, is_tx: bool) {
         let right = dsp::f32_to_u24(OSC2.step());
         let tx = frame_index + skip.0;
         TX_BUFFER[tx + 0] = left as u32;
-        //TX_BUFFER[tx + 1] = right as u32;
+        TX_BUFFER[tx + 1] = right as u32;
         frame_index += 2;
-    }
+    }*/
 
     // debug
     static mut COUNTER: usize = 0;
