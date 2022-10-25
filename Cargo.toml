@@ -4,13 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-#riscv = { version = "=0.8.0" }
-#riscv-rt = "=0.9.0"
-riscv = { git = "https://github.com/rust-embedded/riscv" }
+# Waiting for release: https://github.com/rust-embedded/riscv/pull/110
+#riscv = { version = "=0.9.0", features = ["critical-section-single-hart"] }
+riscv = { git = "https://github.com/rust-embedded/riscv", features = ["critical-section-single-hart"] }
+
+# Waiting for release: https://github.com/rust-embedded/riscv-rt/issues/102
+#riscv-rt = { version = "=0.9.0" }
 riscv-rt = { git = "https://github.com/rust-embedded/riscv-rt" }
+
+d1-pac = { version = "=0.0.30", features = ["critical-section"] }
 #d1-pac = { git = "https://github.com/duskmoon314/aw-pac" }
 #d1-pac = { git = "https://github.com/antoinevg/aw-pac", branch = "antoinevg/i2s" }
-d1-pac = { path = "../upstream/aw-pac.git/d1-pac" }
+#d1-pac = { path = "../upstream/aw-pac.git/d1-pac" }
+
 panic-halt = "=0.2.0"
 
 [profile.dev]
